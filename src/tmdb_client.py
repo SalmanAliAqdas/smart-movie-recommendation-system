@@ -52,10 +52,16 @@ class TMDBClient:
             if genre_id is not None and isinstance(name, str) and name.strip():
                 result[int(genre_id)] = name.strip()
         return result
-    def trending(self): return self._get("/trending/movie/week").get("results", [])
-    def popular(self): return self._get("/movie/popular").get("results", [])
-    def top_rated(self): return self._get("/movie/top_rated").get("results", [])
-    def now_playing(self): return self._get("/movie/now_playing").get("results", [])
+    def trending(self, language: str = "en-US", page: int = 1):
+        return self._get("/trending/movie/week", language=language, page=page).get("results", [])
+    def popular(self, language: str = "en-US", page: int = 1):
+        return self._get("/movie/popular", language=language, page=page).get("results", [])
+    def top_rated(self, language: str = "en-US", page: int = 1):
+        return self._get("/movie/top_rated", language=language, page=page).get("results", [])
+    def now_playing(self, language: str = "en-US", page: int = 1, region: str | None = None):
+        params = {"language": language, "page": page}
+        if region: params["region"] = region
+        return self._get("/movie/now_playing", **params).get("results", [])
     def search_page(self, query: str, page: int = 1, language: str = "en-US"):
         return self._get("/search/movie", query=query.strip(), page=page, language=language, include_adult="false")
 

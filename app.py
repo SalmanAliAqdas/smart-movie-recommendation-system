@@ -8,6 +8,7 @@ from src.catalog import FAMILY_CERTIFICATIONS, certification_allowed, comparison
 from src.database import Database
 from src.demo_data import DEMO_MOVIES, GENRES
 from src.i18n import tr
+from src.homepage import load_homepage_sections
 from src.preferences import merged_preferences
 from src.recommender import Filters, MOOD_MAPPINGS, recommend
 from src.tmdb_client import TMDBClient, TMDBError
@@ -39,6 +40,8 @@ def live_details(mid,lang,region):return client.details(mid,lang,region)
 def live_person(pid,lang):return client.person_movie_credits(pid,lang)
 @st.cache_data(ttl=3600,show_spinner=False)
 def live_collection(cid,lang):return client.collection(cid,lang)
+@st.cache_data(ttl=900,show_spinner=False)
+def live_homepage(lang,region):return load_homepage_sections(client,lang,region)
 
 try:genre_map=GENRES if demo_mode else live_genres(tmdb_lang)
 except TMDBError as exc:st.error(str(exc));st.stop()
@@ -59,6 +62,8 @@ def card(m,k,upcoming=False):
     rt=f" · TMDB ⭐ {rating:.1f} ({int(m.get('vote_count') or 0):,})" if isinstance(rating,(int,float)) else ""
     st.markdown(f'<div class="meta">{release[:10]} · {m.get("original_language","—").upper()}{rt}{" · UPCOMING" if upcoming else ""}</div>',unsafe_allow_html=True)
     if m.get("reasons"):st.caption("Why: "+"; ".join(m["reasons"][:2])+".")
+    if st.button(tr("view_details",ui),key=f"open-{k}",use_container_width=True):
+        st.session_state.open_movie={"source":k.rsplit("-",2)[0],"movie":m}
     add_button(m,k)
 def grid(movies,prefix,count=12,upcoming=False):
     if not movies:st.info(tr("no_results",ui));return
@@ -66,6 +71,23 @@ def grid(movies,prefix,count=12,upcoming=False):
     for i,m in enumerate(movies[:count]):
         with cols[i%len(cols)]:
             with st.container(border=True):card(m,f"{prefix}-{m.get('id')}-{i}",upcoming)
+    opened=st.session_state.get("open_movie")
+    if opened and opened.get("source")==prefix:
+        with st.container(border=True):details(opened["movie"])
+def movie_shelf(title,movies,prefix,upcoming=False,error=None):
+    st.subheader(title)
+    if error:
+        st.warning(tr("homepage_error",ui));return
+    if not movies:
+        st.info(tr("no_results",ui));return
+    state_key=f"shelf_count_{prefix}";visible=st.session_state.get(state_key,6)
+    grid(movies,prefix,min(visible,len(movies)),upcoming)
+    if len(movies)>6:
+        left,right=st.columns([1,5])
+        if visible<len(movies) and left.button(tr("view_more",ui),key=f"more-{prefix}"):
+            st.session_state[state_key]=min(visible+6,len(movies));st.rerun()
+        if visible>6 and right.button(tr("show_less",ui),key=f"less-{prefix}"):
+            st.session_state[state_key]=6;st.rerun()
 def people(m):
     persons=[]; director=m.get("director")
     if isinstance(director,dict):persons.append({**director,"role":"Director"})
@@ -107,15 +129,33 @@ if ui=="ur":st.markdown('<div class="rtl">اردو انٹرفیس فعال ہے�
 
 if page=="Discover":
     st.markdown('<section class="hero"><div class="eyebrow">CINEMATCH 2.0</div><h1>Find a story worth staying up for.</h1><p>Title search and advanced discovery are separate, so every filter does what it says.</p></section>',unsafe_allow_html=True)
-    title_tab,advanced=st.tabs([tr("title_search",ui),tr("advanced_discovery",ui)])
-    with title_tab:
+    with st.container():
+        st.subheader(tr("title_search",ui))
         q=st.text_input(tr("search",ui));p=st.number_input("Results page",1,500,1)
         if q.strip():
             try:results=[x for x in DEMO_MOVIES if q.lower() in x["title"].lower()] if demo_mode else client.search(q,int(p),tmdb_lang)
             except TMDBError as exc:st.error(str(exc));results=[]
             if results:details(st.selectbox(tr("details",ui),results,format_func=lambda x:f"{x.get('title')} ({(x.get('release_date') or '????')[:4]})"))
             else:st.info(tr("no_results",ui))
-    with advanced:
+    with st.spinner("Loading movies from TMDB…"):
+        if demo_mode:
+            home={"trending":DEMO_MOVIES,"popular":sorted(DEMO_MOVIES,key=lambda x:x.get("popularity",0),reverse=True),"top_rated":sorted(DEMO_MOVIES,key=lambda x:x.get("vote_average",0),reverse=True),"now_playing":sorted(DEMO_MOVIES,key=lambda x:x.get("release_date","") ,reverse=True),"upcoming":[]};home_errors={}
+        else:
+            home,home_errors=live_homepage(tmdb_lang,"US")
+    movie_shelf(tr("trending_week",ui),home["trending"],"home-trending",error=home_errors.get("trending"))
+    movie_shelf(tr("popular_movies",ui),home["popular"],"home-popular",error=home_errors.get("popular"))
+    movie_shelf(tr("top_rated_movies",ui),home["top_rated"],"home-top",error=home_errors.get("top_rated"))
+    movie_shelf(tr("now_playing",ui),home["now_playing"],"home-now",error=home_errors.get("now_playing"))
+    movie_shelf(tr("upcoming_movies",ui),home["upcoming"],"home-upcoming",True,home_errors.get("upcoming"))
+    st.subheader(tr("browse_genre",ui))
+    browse_genre=st.selectbox(tr("browse_genre",ui),["—"]+list(name_to_id),label_visibility="collapsed")
+    if browse_genre!="—":
+        try:
+            genre_movies=[m for m in DEMO_MOVIES if name_to_id[browse_genre] in m.get("genre_ids",[])] if demo_mode else client.discover(with_genres=str(name_to_id[browse_genre]),sort_by="popularity.desc",language=tmdb_lang)
+            movie_shelf(browse_genre,genre_movies,"home-genre")
+        except TMDBError:
+            st.warning(tr("homepage_error",ui))
+    with st.expander(tr("advanced_discovery",ui),expanded=False):
         with st.form("advanced"):
             a,b,c=st.columns(3);gs=a.multiselect("Genres",list(name_to_id));ex=a.multiselect("Exclude genres",[x for x in name_to_id if x not in gs]);years=b.slider("Release years",1900,date.today().year,(1980,date.today().year));lang=b.selectbox("Original language",["Any","en","ur","hi","ko","ja","es","fr","de"]);rating=c.slider("Minimum TMDB rating",0.,9.,0.,.5);votes=c.number_input("Minimum vote count",0,1000000,0,100);runtime=a.slider("Runtime where available",0,300,(0,240));country=b.selectbox("Country of origin",["Any","US","GB","PK","IN","KR","JP","FR","DE","CA","AU"]);sort=c.selectbox(tr("sort",ui),["Popularity","Newest release","Oldest release","Highest rated","Most votes"]);family=a.checkbox("Family-Friendly mode");region=b.selectbox("Certification region",["US","GB","PK","IN","CA","AU"]);certs=c.multiselect("Allowed certifications",sorted(FAMILY_CERTIFICATIONS[region]),default=sorted(FAMILY_CERTIFICATIONS[region])) if family else [];submitted=st.form_submit_button("Discover movies",type="primary")
         if submitted:st.session_state.discovery_page=1

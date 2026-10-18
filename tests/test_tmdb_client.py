@@ -27,6 +27,15 @@ def test_genres_rejects_invalid_return_shape():
         TMDBClient(api_key="x").genre_map()
 
 @responses.activate
+def test_homepage_endpoint_forwards_language_page_and_region():
+    responses.get("https://api.themoviedb.org/3/movie/now_playing",json={"results":[{"id":9}]},status=200)
+    movies=TMDBClient(api_key="x").now_playing(language="ur-PK",page=2,region="PK")
+    assert movies==[{"id":9}]
+    assert responses.calls[0].request.params["language"]=="ur-PK"
+    assert responses.calls[0].request.params["page"]=="2"
+    assert responses.calls[0].request.params["region"]=="PK"
+
+@responses.activate
 def test_api_auth_failure():
     responses.get("https://api.themoviedb.org/3/movie/popular", json={"status_message":"Invalid"}, status=401)
     with pytest.raises(TMDBAuthError): TMDBClient(api_key="bad").popular()
