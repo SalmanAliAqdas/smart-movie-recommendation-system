@@ -1,0 +1,39 @@
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.streamlit/secrets.*.toml
+
+# Local runtime data
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Python environments, caches, and test/build output
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+env/
+ENV/
+*.py[cod]
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Editor, operating-system, and local logs
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
