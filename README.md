@@ -4,7 +4,7 @@ CineMatch is a cinematic Streamlit application for discovering real movies throu
 
 ## Features
 
-- **Discover:** separate title search and TMDB discovery workflows, with pagination, genres, excluded genres, release years, original language, minimum TMDB rating and vote count, runtime, origin country, and five sort modes.
+- **Discover:** an automatically loaded Explore Movies poster gallery, compact title search, three gallery sort modes and Load More. Advanced Discovery retains pagination, genres, excluded genres, release years, original language, minimum TMDB rating and vote count, runtime, origin country, and five sort modes.
 - **Recommendations:** deterministic content scoring with genre, mood, language, rating reliability, popularity, preference, runtime and watched/disliked exclusions. Every result includes reasons.
 - **Movie details:** overview, genres, runtime, original language, TMDB rating and vote count, director, main cast, character names, regional certification, TMDB link, and a preferred official YouTube trailer or teaser.
 - **People:** cached actor/director filmographies with profile photographs when TMDB supplies them.
@@ -21,6 +21,8 @@ CineMatch is a cinematic Streamlit application for discovering real movies throu
 ```text
 app.py                       Streamlit entrypoint and UI orchestration
 src/tmdb_client.py           Resilient official TMDB API client
+src/gallery.py               Released movie validation, discovery, fallbacks and pagination
+src/gallery_view.py          Responsive poster markup and scoped gallery styles
 src/recommender.py           Explainable recommendation filtering/scoring
 src/catalog.py               Advanced filters, sorting, paging and comparisons
 src/i18n.py                  English and Urdu interface strings
@@ -67,6 +69,16 @@ DEMO_MODE = "false"
 ```
 
 No source-code change or new deployment URL is required when upgrading the existing app; `app.py` remains the entrypoint.
+
+## Homepage gallery and diagnostics
+
+The gallery uses the existing authenticated TMDB client. It first discovers movies released within the past 540 days with at least 50 votes, then tries popular movies, then broader released-movie discovery with at least 10 votes. All results must have a title, a TMDB poster path and a valid release date no later than today. Sorting applies to the TMDB discovery query and the displayed results. TMDB pages contain up to 20 movies; Load More appends and deduplicates successive pages without requesting full details for every poster.
+
+Successful pages are cached for ten minutes, scoped by credentials, date, language, region, sort and source versions. Session state retains previously loaded movies if a later request fails. Errors are not cached. Authentication failures are reported explicitly; they do not trigger fake content. Without credentials, the homepage shows one setup message and Retry; the other features retain their existing demo behavior. Poster links open the existing details interface.
+
+Earlier homepage shelves hid all exceptions behind identical warnings and cached failed section results for 15 minutes. The gallery logs endpoint paths, HTTP status codes, source names and exception types without query strings, credentials, response bodies or tracebacks. The cached client is keyed by its source fingerprint so an old resource cannot retain missing movie-list methods after an update. To diagnose a deployment failure, inspect its Streamlit logs for `TMDB endpoint=` and `Gallery source=` entries; local tests cannot establish a production HTTP failure without deployment logs or live credentials.
+
+The gallery layout uses its own CSS classes rather than Streamlit column internals. Advanced Discovery runs when its form is submitted so collapsed filters do not issue an extra discovery request during initial gallery loading.
 
 ## Advanced search behavior
 

@@ -1,8 +1,11 @@
 """Resilient TMDB API client. No UI dependencies and no credential persistence."""
 from __future__ import annotations
+import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+logger = logging.getLogger(__name__)
 
 class TMDBError(RuntimeError): pass
 class TMDBAuthError(TMDBError): pass
@@ -28,13 +31,24 @@ class TMDBClient:
         try:
             response = self.session.get(f"{self.BASE_URL}{path}", params=params, headers=headers, timeout=self.timeout)
         except requests.RequestException as exc:
-            raise TMDBError(f"Could not reach TMDB: {exc}") from exc
+            # Request exceptions can contain the full URL, including api_key.
+            logger.warning("TMDB endpoint=%s transport=%s", path, type(exc).__name__)
+            raise TMDBError("Could not reach TMDB. Please retry shortly.") from None
+        logger.info("TMDB endpoint=%s status=%s", path, response.status_code)
+        if response.status_code >= 400:
+            logger.warning("TMDB endpoint=%s status=%s", path, response.status_code)
         if response.status_code in (401, 403): raise TMDBAuthError("TMDB rejected the credential. Check your API key or read token.")
         if response.status_code == 429: raise TMDBRateLimitError("TMDB rate limit reached. Please wait and try again.")
         try: response.raise_for_status()
-        except requests.RequestException as exc: raise TMDBError(f"TMDB returned HTTP {response.status_code}.") from exc
-        try: return response.json()
-        except ValueError as exc: raise TMDBError("TMDB returned an invalid response.") from exc
+        except requests.RequestException: raise TMDBError(f"TMDB returned HTTP {response.status_code}.") from None
+        try: payload = response.json()
+        except ValueError:
+            logger.warning("TMDB endpoint=%s invalid_json=true", path)
+            raise TMDBError("TMDB returned an invalid response.") from None
+        if not isinstance(payload, dict):
+            logger.warning("TMDB endpoint=%s invalid_object=true", path)
+            raise TMDBError("TMDB returned an invalid response object.")
+        return payload
 
     def genres(self, language: str = "en-US") -> list[dict]:
         """Return TMDB movie genres as a validated list of genre objects."""

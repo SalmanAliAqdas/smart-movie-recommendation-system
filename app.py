@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os, random
+import hashlib
 from datetime import date
 from pathlib import Path
 import streamlit as st
@@ -8,7 +9,8 @@ from src.catalog import FAMILY_CERTIFICATIONS, certification_allowed, comparison
 from src.database import Database
 from src.demo_data import DEMO_MOVIES, GENRES
 from src.i18n import tr
-from src.homepage import complete_homepage_sections, load_homepage_sections
+from src.gallery import GalleryUnavailable, SORTS, load_gallery_page, merge_movies, select_gallery_movie, sort_gallery
+from src.gallery_view import gallery_html
 from src.preferences import merged_preferences
 from src.recommender import Filters, MOOD_MAPPINGS, recommend
 from src.tmdb_client import TMDBClient, TMDBError
@@ -42,10 +44,10 @@ token,key=secret("TMDB_READ_ACCESS_TOKEN"),secret("TMDB_API_KEY")
 demo_mode=str(secret("DEMO_MODE") or "").lower()=="true" or not(token or key)
 db=Database(Path(__file__).with_name("movie_recommender.db")); prefs=merged_preferences(db.get_preferences())
 ui=prefs.get("interface_language","en"); tmdb_lang="ur-PK" if ui=="ur" else "en-US"
-TMDB_CLIENT_CACHE_VERSION = 2
+TMDB_CLIENT_CACHE_VERSION = hashlib.sha256(Path(__file__).with_name("src").joinpath("tmdb_client.py").read_bytes()).hexdigest()
 @st.cache_resource
 def get_v2_client(k,t,cache_version):
-    # cache_version intentionally invalidates pre-V2 TMDBClient instances after hot reloads.
+    # Source fingerprint invalidates retained clients whenever their methods change.
     return TMDBClient(api_key=k,read_token=t)
 client=None if demo_mode else get_v2_client(key,token,TMDB_CLIENT_CACHE_VERSION)
 @st.cache_data(ttl=3600,show_spinner=False)
@@ -56,14 +58,18 @@ def live_details(mid,lang,region):return client.details(mid,lang,region)
 def live_person(pid,lang):return client.person_movie_credits(pid,lang)
 @st.cache_data(ttl=3600,show_spinner=False)
 def live_collection(cid,lang):return client.collection(cid,lang)
-# Streamlit hashes this wrapper, not changes to the imported section loader.
-# Bump this value when the homepage response schema changes.
-HOMEPAGE_CACHE_VERSION = 2
-@st.cache_data(ttl=900,show_spinner=False)
-def live_homepage(lang,region,cache_version):return load_homepage_sections(client,lang,region)
+GALLERY_CACHE_VERSION = hashlib.sha256(Path(__file__).with_name("src").joinpath("gallery.py").read_bytes()).hexdigest()
+credential_identity = hashlib.sha256(((key or "") + "\0" + (token or "")).encode()).hexdigest()
+@st.cache_data(ttl=600,max_entries=128,show_spinner=False)
+def live_gallery(sort,page,lang,region,day,identity,client_version,gallery_version,attempt,_client):
+    # Only successful pages are cached; exceptions remain retryable.
+    return load_gallery_page(_client,sort,page,lang,region,date.fromisoformat(day))
 
+genre_error = False
 try:genre_map=GENRES if demo_mode else live_genres(tmdb_lang)
-except TMDBError as exc:st.error(str(exc));st.stop()
+except TMDBError:
+    # A genre-service outage must not prevent the independent poster gallery.
+    genre_map=GENRES;genre_error=True
 name_to_id={v:k for k,v in genre_map.items()}
 def hydrate(m,region="US"):
     if demo_mode:return m
@@ -94,20 +100,6 @@ def grid(movies,prefix,count=12,upcoming=False):
     opened=st.session_state.get("open_movie")
     if opened and opened.get("source")==prefix:
         with st.container(border=True):details(opened["movie"])
-def movie_shelf(title,movies,prefix,upcoming=False,error=None,initial=12):
-    st.subheader(title)
-    if error:
-        st.warning(tr("homepage_error",ui));return
-    if not movies:
-        st.info(tr("no_results",ui));return
-    state_key=f"shelf_count_{prefix}";visible=st.session_state.get(state_key,initial)
-    grid(movies,prefix,min(visible,len(movies)),upcoming)
-    if len(movies)>initial:
-        left,right=st.columns([1,5])
-        if visible<len(movies) and left.button(tr("view_more",ui),key=f"more-{prefix}"):
-            st.session_state[state_key]=min(visible+6,len(movies));st.rerun()
-        if visible>initial and right.button(tr("show_less",ui),key=f"less-{prefix}"):
-            st.session_state[state_key]=initial;st.rerun()
 def people(m):
     persons=[]; director=m.get("director")
     if isinstance(director,dict):persons.append({**director,"role":"Director"})
@@ -155,45 +147,73 @@ if page=="Discover":
         except TMDBError as exc:st.error(str(exc));results=[]
         if results:details(st.selectbox(tr("details",ui),results,format_func=lambda x:f"{x.get('title')} ({(x.get('release_date') or '????')[:4]})"))
         else:st.info(tr("no_results",ui))
-    with st.spinner("Loading movies from TMDB…"):
-        if demo_mode:
-            home={"latest":sorted([m for m in DEMO_MOVIES if (m.get("release_date") or "9999")<=date.today().isoformat()],key=lambda x:x.get("release_date","") ,reverse=True),"trending":DEMO_MOVIES,"popular":sorted(DEMO_MOVIES,key=lambda x:x.get("popularity",0),reverse=True),"top_rated":sorted(DEMO_MOVIES,key=lambda x:x.get("vote_average",0),reverse=True),"upcoming":[]};home_errors={}
+    heading,sort_control=st.columns([3,1],vertical_alignment="center")
+    heading.subheader(tr("explore_movies",ui))
+    initial_sort=st.query_params.get("gallery_sort","newest")
+    initial_sort=initial_sort if initial_sort in SORTS else "newest"
+    gallery_sort=sort_control.selectbox(tr("sort",ui),list(SORTS),index=list(SORTS).index(initial_sort),format_func=lambda x:tr("gallery_sort_"+x,ui),key="homepage_sort",label_visibility="collapsed")
+    day=date.today().isoformat()
+    snapshot_key=(gallery_sort,tmdb_lang,"US",day,credential_identity,TMDB_CLIENT_CACHE_VERSION,GALLERY_CACHE_VERSION)
+    snapshots=st.session_state.setdefault("gallery_snapshots",{})
+    gallery=snapshots.setdefault(snapshot_key,{"movies":[],"page":0,"has_more":False,"request":1,"attempt":0,"error":None})
+    requested=gallery.pop("request",None)
+    if requested is not None:
+        if client is None:
+            gallery["error"]=tr("gallery_config",ui)
         else:
-            home,home_errors=live_homepage(tmdb_lang,"US",HOMEPAGE_CACHE_VERSION)
-    home,home_errors=complete_homepage_sections(client,home,home_errors,tmdb_lang,"US")
-    st.markdown('<div class="section-kicker">Fresh releases</div>',unsafe_allow_html=True)
-    movie_shelf("Latest Movies",home["latest"],"home-latest",error=home_errors.get("latest"),initial=18)
-    movie_shelf(tr("trending_week",ui),home["trending"],"home-trending",error=home_errors.get("trending"))
-    movie_shelf(tr("popular_movies",ui),home["popular"],"home-popular",error=home_errors.get("popular"))
-    movie_shelf(tr("top_rated_movies",ui),home["top_rated"],"home-top",error=home_errors.get("top_rated"))
-    movie_shelf(tr("upcoming_movies",ui),home["upcoming"],"home-upcoming",True,home_errors.get("upcoming"))
-    st.subheader(tr("browse_genre",ui))
-    browse_genre=st.selectbox(tr("browse_genre",ui),["—"]+list(name_to_id),label_visibility="collapsed")
-    if browse_genre!="—":
-        try:
-            genre_movies=[m for m in DEMO_MOVIES if name_to_id[browse_genre] in m.get("genre_ids",[])] if demo_mode else client.discover(with_genres=str(name_to_id[browse_genre]),sort_by="popularity.desc",language=tmdb_lang)
-            movie_shelf(browse_genre,genre_movies,"home-genre")
-        except TMDBError:
-            st.warning(tr("homepage_error",ui))
+            try:
+                with st.spinner(tr("gallery_loading",ui)):
+                    result=live_gallery(gallery_sort,requested,tmdb_lang,"US",day,credential_identity,TMDB_CLIENT_CACHE_VERSION,GALLERY_CACHE_VERSION,gallery["attempt"],client)
+                gallery["movies"]=merge_movies(gallery["movies"],result.movies,gallery_sort)
+                gallery.update(page=requested,has_more=result.has_more,error=None)
+            except GalleryUnavailable as exc:
+                gallery["error"]=tr("gallery_auth" if exc.auth_failed else "gallery_unavailable",ui)
+                gallery["failed_page"]=requested
+                # Keep previously successful real metadata during a temporary outage.
+                if not gallery["movies"]:
+                    for saved_key,saved in snapshots.items():
+                        if saved_key[1:]==snapshot_key[1:] and saved["movies"]:
+                            gallery["movies"]=sort_gallery(saved["movies"],gallery_sort);break
+    if gallery["movies"]:
+        st.html(gallery_html(gallery["movies"],gallery_sort,language=ui))
+    if gallery["error"]:
+        st.caption(gallery["error"]+(" "+tr("gallery_cached",ui) if gallery["movies"] else ""))
+        if st.button(tr("gallery_retry",ui),key="gallery-retry"):
+            gallery["attempt"]+=1;gallery["request"]=gallery.get("failed_page",1);st.rerun()
+    elif gallery["has_more"]:
+        if st.button(tr("load_more",ui),key="gallery-more",use_container_width=True):
+            gallery["request"]=gallery["page"]+1;st.rerun()
+    selected=st.query_params.get("gallery_movie")
+    if selected is not None:
+        opened=select_gallery_movie(selected,gallery["movies"])
+        del st.query_params["gallery_movie"]
+        if opened and client:
+            st.session_state.open_movie=opened
+            @st.dialog(tr("details",ui),width="large")
+            def gallery_details():
+                details(st.session_state.open_movie["movie"])
+            gallery_details()
     with st.expander(tr("advanced_discovery",ui),expanded=False):
+        if genre_error:st.caption(tr("gallery_genres",ui))
         with st.form("advanced"):
             a,b,c=st.columns(3);gs=a.multiselect("Genres",list(name_to_id));ex=a.multiselect("Exclude genres",[x for x in name_to_id if x not in gs]);years=b.slider("Release years",1900,date.today().year,(1980,date.today().year));lang=b.selectbox("Original language",["Any","en","ur","hi","ko","ja","es","fr","de"]);rating=c.slider("Minimum TMDB rating",0.,9.,0.,.5);votes=c.number_input("Minimum vote count",0,1000000,0,100);runtime=a.slider("Runtime where available",0,300,(0,240));country=b.selectbox("Country of origin",["Any","US","GB","PK","IN","KR","JP","FR","DE","CA","AU"]);sort=c.selectbox(tr("sort",ui),["Popularity","Newest release","Oldest release","Highest rated","Most votes"]);family=a.checkbox("Family-Friendly mode");region=b.selectbox("Certification region",["US","GB","PK","IN","CA","AU"]);certs=c.multiselect("Allowed certifications",sorted(FAMILY_CERTIFICATIONS[region]),default=sorted(FAMILY_CERTIFICATIONS[region])) if family else [];submitted=st.form_submit_button("Discover movies",type="primary")
-        if submitted:st.session_state.discovery_page=1
+        if submitted:st.session_state.discovery_page=1;st.session_state.discovery_active=True
         if "discovery_page" not in st.session_state:st.session_state.discovery_page=1
-        try:
-            if demo_mode:catalog=DEMO_MOVIES
-            else:
-                params={"sort_by":{"Popularity":"popularity.desc","Newest release":"primary_release_date.desc","Oldest release":"primary_release_date.asc","Highest rated":"vote_average.desc","Most votes":"vote_count.desc"}[sort],"vote_average.gte":rating,"vote_count.gte":votes,"primary_release_date.gte":f"{years[0]}-01-01","primary_release_date.lte":f"{years[1]}-12-31","with_runtime.gte":runtime[0],"with_runtime.lte":runtime[1],"language":tmdb_lang}
-                if gs:params["with_genres"]=",".join(str(name_to_id[x]) for x in gs)
-                if ex:params["without_genres"]=",".join(str(name_to_id[x]) for x in ex)
-                if lang!="Any":params["with_original_language"]=lang
-                if country!="Any":params["with_origin_country"]=country
-                catalog=client.discover(st.session_state.discovery_page,**params);catalog=[hydrate(x,region) for x in catalog] if family or country!="Any" or runtime!=(0,240) else catalog
-            catalog=filter_movies(catalog,genres={name_to_id[x] for x in gs},excluded={name_to_id[x] for x in ex},year_min=years[0],year_max=years[1],language=lang,rating=rating,votes=votes,runtime_min=runtime[0],runtime_max=runtime[1],country=country)
-            if family:catalog=[x for x in catalog if certification_allowed(x.get("certification"),region,True,set(certs))]
-            grid(sort_movies(catalog,sort),f"discovery-{st.session_state.discovery_page}")
-            if not demo_mode and st.button(tr("load_more",ui)):st.session_state.discovery_page+=1;st.rerun()
-        except TMDBError as exc:st.error(str(exc))
+        if st.session_state.get("discovery_active"):
+            try:
+                if demo_mode:catalog=DEMO_MOVIES
+                else:
+                    params={"sort_by":{"Popularity":"popularity.desc","Newest release":"primary_release_date.desc","Oldest release":"primary_release_date.asc","Highest rated":"vote_average.desc","Most votes":"vote_count.desc"}[sort],"vote_average.gte":rating,"vote_count.gte":votes,"primary_release_date.gte":f"{years[0]}-01-01","primary_release_date.lte":f"{years[1]}-12-31","with_runtime.gte":runtime[0],"with_runtime.lte":runtime[1],"language":tmdb_lang}
+                    if gs:params["with_genres"]=",".join(str(name_to_id[x]) for x in gs)
+                    if ex:params["without_genres"]=",".join(str(name_to_id[x]) for x in ex)
+                    if lang!="Any":params["with_original_language"]=lang
+                    if country!="Any":params["with_origin_country"]=country
+                    catalog=client.discover(st.session_state.discovery_page,**params);catalog=[hydrate(x,region) for x in catalog] if family or country!="Any" or runtime!=(0,240) else catalog
+                catalog=filter_movies(catalog,genres={name_to_id[x] for x in gs},excluded={name_to_id[x] for x in ex},year_min=years[0],year_max=years[1],language=lang,rating=rating,votes=votes,runtime_min=runtime[0],runtime_max=runtime[1],country=country)
+                if family:catalog=[x for x in catalog if certification_allowed(x.get("certification"),region,True,set(certs))]
+                grid(sort_movies(catalog,sort),f"discovery-{st.session_state.discovery_page}")
+                if not demo_mode and st.button(tr("load_more",ui)):st.session_state.discovery_page+=1;st.rerun()
+            except TMDBError as exc:st.error(str(exc))
         if family:st.warning("Certifications vary by region. Unclassified titles are excluded; parents or guardians should verify suitability independently.")
 
 elif page=="Recommendations":

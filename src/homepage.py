@@ -2,6 +2,9 @@
 from __future__ import annotations
 from collections.abc import Callable
 from datetime import date
+import logging
+
+logger = logging.getLogger(__name__)
 
 SECTION_KEYS = ("latest", "trending", "popular", "top_rated", "upcoming")
 
@@ -43,6 +46,7 @@ def complete_homepage_sections(
             if key in errors:
                 section_errors[key] = str(errors[key])
         except Exception as exc:
+            logger.warning("Homepage section=%s failure=%s", key, type(exc).__name__)
             complete[key] = []
             section_errors[key] = str(exc)
     return complete, section_errors
