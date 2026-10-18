@@ -15,8 +15,24 @@ from src.tmdb_client import TMDBClient, TMDBError
 from src.watchlist_export import watchlist_csv
 
 load_dotenv()
-st.set_page_config(page_title="CineMatch 2.0", page_icon="🎬", layout="wide")
-st.markdown("""<style>@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=Noto+Nastaliq+Urdu&family=Playfair+Display:wght@700&display=swap');.stApp{background:radial-gradient(circle at 80% 0%,#2b1539 0,#0c0d13 34%,#08090d 100%);color:#f4f1eb}.block-container{max-width:1400px;padding-top:2rem}.hero{padding:2.7rem;border:1px solid #ffffff1a;border-radius:24px;background:linear-gradient(120deg,#171824ee,#38152dcc);margin-bottom:1.4rem}.hero h1{font-family:'Playfair Display';font-size:3.35rem;margin:0}.eyebrow{color:#f6af45;letter-spacing:.18em;font-weight:700;font-size:.78rem}.poster-placeholder{height:190px;border-radius:12px;background:linear-gradient(145deg,#542343,#171827);display:flex;align-items:center;justify-content:center;font-size:3rem}.meta{color:#aaa9b4;font-size:.84rem}.demo-pill{background:#f6af4520;color:#f6af45;padding:.25rem .6rem;border-radius:999px;font-size:.75rem}.stButton>button{border-radius:999px}.attribution{font-size:.78rem;color:#8d8d99;padding-top:2rem}.rtl{direction:rtl;text-align:right;font-family:'Noto Nastaliq Urdu'}h1,h2,h3{font-family:'DM Sans'}</style>""",unsafe_allow_html=True)
+st.set_page_config(page_title="CineMatch", page_icon="🎬", layout="wide", initial_sidebar_state="collapsed")
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Nastaliq+Urdu&display=swap');
+:root{--ink:#f5f5f7;--muted:#9c9daa;--accent:#ffb547}
+.stApp{background:radial-gradient(circle at 85% -10%,#28182f 0,#0d0e13 32%,#090a0e 70%);color:var(--ink)}
+.block-container{max-width:1480px;padding:1rem 1.35rem 2rem}
+[data-testid="stSidebar"]{background:#0d0e13;border-right:1px solid #ffffff0d}
+h1,h2,h3{font-family:'DM Sans',sans-serif;letter-spacing:-.02em}h1{font-size:2rem!important}h2{font-size:1.35rem!important;margin:1.15rem 0 .4rem!important}h3{font-size:.93rem!important;line-height:1.25!important;margin:.35rem 0 .08rem!important}
+.catalog-header{display:flex;align-items:center;gap:.65rem;margin:0 0 .55rem}.catalog-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#ffbf5b,#d85065);display:grid;place-items:center}.catalog-title{font-weight:700;font-size:1.08rem}.catalog-subtitle{color:var(--muted);font-size:.76rem}
+.section-kicker{color:var(--accent);font-size:.7rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;margin-bottom:-.45rem}
+.poster-placeholder{aspect-ratio:2/3;border-radius:10px;background:linear-gradient(145deg,#3c263c,#171827);display:flex;align-items:center;justify-content:center;font-size:2rem}
+[data-testid="stImage"] img{aspect-ratio:2/3;object-fit:cover;border-radius:10px;box-shadow:0 10px 28px #0008;transition:transform .18s ease,filter .18s ease}[data-testid="stImage"] img:hover{transform:translateY(-3px);filter:brightness(1.08)}
+.meta{color:var(--muted);font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.demo-pill{background:#f6af4518;color:#f6af45;padding:.22rem .55rem;border:1px solid #f6af4530;border-radius:999px;font-size:.7rem}
+.stButton>button{border-radius:8px;min-height:1.9rem;padding:.2rem .55rem;font-size:.76rem;border-color:#ffffff17;background:#ffffff08}[data-testid="stVerticalBlockBorderWrapper"]{border-color:#ffffff10!important;background:#11121880!important;border-radius:12px!important}[data-testid="stVerticalBlockBorderWrapper"]>div{padding:.45rem!important}[data-testid="column"]{min-width:0}
+div[data-testid="stTextInput"] input{border-radius:10px;background:#15161d;border-color:#ffffff18}.attribution{font-size:.7rem;color:#737480;padding-top:1.25rem}.rtl{direction:rtl;text-align:right;font-family:'Noto Nastaliq Urdu'}
+@media(max-width:900px){.block-container{padding:.75rem}.catalog-subtitle{display:none}h2{font-size:1.15rem!important}[data-testid="stHorizontalBlock"]:has(>[data-testid="column"]:nth-child(6)){flex-wrap:wrap}[data-testid="stHorizontalBlock"]:has(>[data-testid="column"]:nth-child(6))>[data-testid="column"]{flex:1 1 calc(25% - 1rem)!important;min-width:calc(25% - 1rem)!important}}
+@media(max-width:600px){[data-testid="stHorizontalBlock"]:has(>[data-testid="column"]:nth-child(6))>[data-testid="column"]{flex-basis:calc(50% - .5rem)!important;min-width:calc(50% - .5rem)!important}}
+</style>""",unsafe_allow_html=True)
 
 def secret(name):
     try:return st.secrets.get(name) or os.getenv(name)
@@ -59,35 +75,36 @@ def add_button(m,k):
 def card(m,k,upcoming=False):
     poster(m);rating=m.get("vote_average"); release=m.get("release_date") or "Unknown"
     st.markdown(f"### {m.get('title') or 'Untitled'}")
-    rt=f" · TMDB ⭐ {rating:.1f} ({int(m.get('vote_count') or 0):,})" if isinstance(rating,(int,float)) else ""
-    st.markdown(f'<div class="meta">{release[:10]} · {m.get("original_language","—").upper()}{rt}{" · UPCOMING" if upcoming else ""}</div>',unsafe_allow_html=True)
+    year=release[:4] if release != "Unknown" else "—"
+    rt=f" · ★ {rating:.1f}" if isinstance(rating,(int,float)) else ""
+    st.markdown(f'<div class="meta">{year}{rt}{" · Upcoming" if upcoming else ""}</div>',unsafe_allow_html=True)
     if m.get("reasons"):st.caption("Why: "+"; ".join(m["reasons"][:2])+".")
     if st.button(tr("view_details",ui),key=f"open-{k}",use_container_width=True):
         st.session_state.open_movie={"source":k.rsplit("-",2)[0],"movie":m}
     add_button(m,k)
 def grid(movies,prefix,count=12,upcoming=False):
     if not movies:st.info(tr("no_results",ui));return
-    cols=st.columns(min(3,len(movies)))
+    cols=st.columns(min(6,len(movies)),gap="small")
     for i,m in enumerate(movies[:count]):
         with cols[i%len(cols)]:
             with st.container(border=True):card(m,f"{prefix}-{m.get('id')}-{i}",upcoming)
     opened=st.session_state.get("open_movie")
     if opened and opened.get("source")==prefix:
         with st.container(border=True):details(opened["movie"])
-def movie_shelf(title,movies,prefix,upcoming=False,error=None):
+def movie_shelf(title,movies,prefix,upcoming=False,error=None,initial=12):
     st.subheader(title)
     if error:
         st.warning(tr("homepage_error",ui));return
     if not movies:
         st.info(tr("no_results",ui));return
-    state_key=f"shelf_count_{prefix}";visible=st.session_state.get(state_key,6)
+    state_key=f"shelf_count_{prefix}";visible=st.session_state.get(state_key,initial)
     grid(movies,prefix,min(visible,len(movies)),upcoming)
-    if len(movies)>6:
+    if len(movies)>initial:
         left,right=st.columns([1,5])
         if visible<len(movies) and left.button(tr("view_more",ui),key=f"more-{prefix}"):
             st.session_state[state_key]=min(visible+6,len(movies));st.rerun()
-        if visible>6 and right.button(tr("show_less",ui),key=f"less-{prefix}"):
-            st.session_state[state_key]=6;st.rerun()
+        if visible>initial and right.button(tr("show_less",ui),key=f"less-{prefix}"):
+            st.session_state[state_key]=initial;st.rerun()
 def people(m):
     persons=[]; director=m.get("director")
     if isinstance(director,dict):persons.append({**director,"role":"Director"})
@@ -128,24 +145,23 @@ with st.sidebar:
 if ui=="ur":st.markdown('<div class="rtl">اردو انٹرفیس فعال ہے۔ دستیاب نہ ہونے پر فلمی معلومات انگریزی میں دکھائی جاتی ہیں۔</div>',unsafe_allow_html=True)
 
 if page=="Discover":
-    st.markdown('<section class="hero"><div class="eyebrow">CINEMATCH 2.0</div><h1>Find a story worth staying up for.</h1><p>Title search and advanced discovery are separate, so every filter does what it says.</p></section>',unsafe_allow_html=True)
-    with st.container():
-        st.subheader(tr("title_search",ui))
-        q=st.text_input(tr("search",ui));p=st.number_input("Results page",1,500,1)
-        if q.strip():
-            try:results=[x for x in DEMO_MOVIES if q.lower() in x["title"].lower()] if demo_mode else client.search(q,int(p),tmdb_lang)
-            except TMDBError as exc:st.error(str(exc));results=[]
-            if results:details(st.selectbox(tr("details",ui),results,format_func=lambda x:f"{x.get('title')} ({(x.get('release_date') or '????')[:4]})"))
-            else:st.info(tr("no_results",ui))
+    st.markdown('<div class="catalog-header"><div class="catalog-mark">▶</div><div><div class="catalog-title">CineMatch</div><div class="catalog-subtitle">Discover your next great watch</div></div></div>',unsafe_allow_html=True)
+    q=st.text_input(tr("search",ui),placeholder="Search movies by title…",label_visibility="collapsed")
+    if q.strip():
+        try:results=[x for x in DEMO_MOVIES if q.lower() in x["title"].lower()] if demo_mode else client.search(q,1,tmdb_lang)
+        except TMDBError as exc:st.error(str(exc));results=[]
+        if results:details(st.selectbox(tr("details",ui),results,format_func=lambda x:f"{x.get('title')} ({(x.get('release_date') or '????')[:4]})"))
+        else:st.info(tr("no_results",ui))
     with st.spinner("Loading movies from TMDB…"):
         if demo_mode:
-            home={"trending":DEMO_MOVIES,"popular":sorted(DEMO_MOVIES,key=lambda x:x.get("popularity",0),reverse=True),"top_rated":sorted(DEMO_MOVIES,key=lambda x:x.get("vote_average",0),reverse=True),"now_playing":sorted(DEMO_MOVIES,key=lambda x:x.get("release_date","") ,reverse=True),"upcoming":[]};home_errors={}
+            home={"latest":sorted([m for m in DEMO_MOVIES if (m.get("release_date") or "9999")<=date.today().isoformat()],key=lambda x:x.get("release_date","") ,reverse=True),"trending":DEMO_MOVIES,"popular":sorted(DEMO_MOVIES,key=lambda x:x.get("popularity",0),reverse=True),"top_rated":sorted(DEMO_MOVIES,key=lambda x:x.get("vote_average",0),reverse=True),"upcoming":[]};home_errors={}
         else:
             home,home_errors=live_homepage(tmdb_lang,"US")
+    st.markdown('<div class="section-kicker">Fresh releases</div>',unsafe_allow_html=True)
+    movie_shelf("Latest Movies",home["latest"],"home-latest",error=home_errors.get("latest"),initial=18)
     movie_shelf(tr("trending_week",ui),home["trending"],"home-trending",error=home_errors.get("trending"))
     movie_shelf(tr("popular_movies",ui),home["popular"],"home-popular",error=home_errors.get("popular"))
     movie_shelf(tr("top_rated_movies",ui),home["top_rated"],"home-top",error=home_errors.get("top_rated"))
-    movie_shelf(tr("now_playing",ui),home["now_playing"],"home-now",error=home_errors.get("now_playing"))
     movie_shelf(tr("upcoming_movies",ui),home["upcoming"],"home-upcoming",True,home_errors.get("upcoming"))
     st.subheader(tr("browse_genre",ui))
     browse_genre=st.selectbox(tr("browse_genre",ui),["—"]+list(name_to_id),label_visibility="collapsed")
