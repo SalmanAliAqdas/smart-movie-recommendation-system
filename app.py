@@ -8,7 +8,7 @@ from src.catalog import FAMILY_CERTIFICATIONS, certification_allowed, comparison
 from src.database import Database
 from src.demo_data import DEMO_MOVIES, GENRES
 from src.i18n import tr
-from src.homepage import load_homepage_sections
+from src.homepage import complete_homepage_sections, load_homepage_sections
 from src.preferences import merged_preferences
 from src.recommender import Filters, MOOD_MAPPINGS, recommend
 from src.tmdb_client import TMDBClient, TMDBError
@@ -56,8 +56,11 @@ def live_details(mid,lang,region):return client.details(mid,lang,region)
 def live_person(pid,lang):return client.person_movie_credits(pid,lang)
 @st.cache_data(ttl=3600,show_spinner=False)
 def live_collection(cid,lang):return client.collection(cid,lang)
+# Streamlit hashes this wrapper, not changes to the imported section loader.
+# Bump this value when the homepage response schema changes.
+HOMEPAGE_CACHE_VERSION = 2
 @st.cache_data(ttl=900,show_spinner=False)
-def live_homepage(lang,region):return load_homepage_sections(client,lang,region)
+def live_homepage(lang,region,cache_version):return load_homepage_sections(client,lang,region)
 
 try:genre_map=GENRES if demo_mode else live_genres(tmdb_lang)
 except TMDBError as exc:st.error(str(exc));st.stop()
@@ -156,7 +159,8 @@ if page=="Discover":
         if demo_mode:
             home={"latest":sorted([m for m in DEMO_MOVIES if (m.get("release_date") or "9999")<=date.today().isoformat()],key=lambda x:x.get("release_date","") ,reverse=True),"trending":DEMO_MOVIES,"popular":sorted(DEMO_MOVIES,key=lambda x:x.get("popularity",0),reverse=True),"top_rated":sorted(DEMO_MOVIES,key=lambda x:x.get("vote_average",0),reverse=True),"upcoming":[]};home_errors={}
         else:
-            home,home_errors=live_homepage(tmdb_lang,"US")
+            home,home_errors=live_homepage(tmdb_lang,"US",HOMEPAGE_CACHE_VERSION)
+    home,home_errors=complete_homepage_sections(client,home,home_errors,tmdb_lang,"US")
     st.markdown('<div class="section-kicker">Fresh releases</div>',unsafe_allow_html=True)
     movie_shelf("Latest Movies",home["latest"],"home-latest",error=home_errors.get("latest"),initial=18)
     movie_shelf(tr("trending_week",ui),home["trending"],"home-trending",error=home_errors.get("trending"))

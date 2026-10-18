@@ -18,20 +18,35 @@ def released_newest_first(movies: list[dict], today: date | None = None) -> list
     released = [movie for movie in movies if movie.get("release_date") and movie["release_date"] <= cutoff]
     return sorted(released, key=lambda movie: movie["release_date"], reverse=True)
 
-def load_homepage_sections(client, language: str = "en-US", region: str = "US") -> tuple[dict[str, list[dict]], dict[str, str]]:
-    """Load each shelf independently so one failed endpoint cannot blank the page."""
-    loaders: dict[str, Callable] = {
+def _section_loaders(client, language: str, region: str) -> dict[str, Callable]:
+    return {
         "latest": lambda: released_newest_first(_movie_list(client.now_playing(language=language, region=region))),
         "trending": lambda: client.trending(language=language),
         "popular": lambda: client.popular(language=language),
         "top_rated": lambda: client.top_rated(language=language),
         "upcoming": lambda: client.upcoming(language=language, region=region),
     }
-    sections, errors = {}, {}
-    for key, loader in loaders.items():
+
+def complete_homepage_sections(
+    client, sections: dict | None, errors: dict | None,
+    language: str = "en-US", region: str = "US",
+) -> tuple[dict[str, list[dict]], dict[str, str]]:
+    """Enforce the shelf schema and refresh keys absent from older cached results."""
+    sections = sections if isinstance(sections, dict) else {}
+    errors = errors if isinstance(errors, dict) else {}
+    loaders = _section_loaders(client, language, region)
+    complete, section_errors = {}, {}
+    for key in SECTION_KEYS:
         try:
-            sections[key] = _movie_list(loader())
+            payload = sections[key] if key in sections else loaders[key]()
+            complete[key] = _movie_list(payload)
+            if key in errors:
+                section_errors[key] = str(errors[key])
         except Exception as exc:
-            sections[key] = []
-            errors[key] = str(exc)
-    return sections, errors
+            complete[key] = []
+            section_errors[key] = str(exc)
+    return complete, section_errors
+
+def load_homepage_sections(client, language: str = "en-US", region: str = "US") -> tuple[dict[str, list[dict]], dict[str, str]]:
+    """Load each shelf independently so one failed endpoint cannot blank the page."""
+    return complete_homepage_sections(client, {}, {}, language, region)

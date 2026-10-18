@@ -1,6 +1,6 @@
 from datetime import date
 
-from src.homepage import SECTION_KEYS, load_homepage_sections, released_newest_first
+from src.homepage import SECTION_KEYS, complete_homepage_sections, load_homepage_sections, released_newest_first
 
 class FakeClient:
     def __init__(self, fail=None): self.fail=fail; self.calls=[]
@@ -49,4 +49,25 @@ def test_homepage_rejects_malformed_section_without_breaking_others():
     sections,errors=load_homepage_sections(MalformedClient())
     assert sections["top_rated"]==[] and "top_rated" in errors
     assert sections["trending"]
+
+def test_legacy_cached_homepage_fetches_missing_latest_without_reloading_other_shelves():
+    client=FakeClient()
+    cached={"now_playing":[{"id":99}],"trending":[{"id":1}],"popular":[{"id":2}],"top_rated":[{"id":3}],"upcoming":[{"id":4}]}
+    sections,errors=complete_homepage_sections(client,cached,{},"en-US","US")
+    assert tuple(sections)==SECTION_KEYS
+    assert [movie["id"] for movie in sections["latest"]]==[10,11]
+    assert sections["trending"]==cached["trending"]
+    assert client.calls==[("now_playing",{"language":"en-US","region":"US"})]
+    assert errors=={}
+
+def test_missing_latest_failure_keeps_other_cached_sections_visible():
+    class FailingLatest(FakeClient):
+        def now_playing(self,**kwargs): raise RuntimeError("TMDB temporarily unavailable")
+
+    cached={"trending":[{"id":1}],"popular":[{"id":2}],"top_rated":[{"id":3}],"upcoming":[{"id":4}]}
+    sections,errors=complete_homepage_sections(FailingLatest(),cached,{})
+    assert tuple(sections)==SECTION_KEYS
+    assert sections["latest"]==[]
+    assert "TMDB temporarily unavailable" in errors["latest"]
+    assert all(sections[key]==cached[key] for key in cached)
 
