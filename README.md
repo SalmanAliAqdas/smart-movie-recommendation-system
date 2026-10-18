@@ -1,29 +1,39 @@
-# CineMatch — Smart Movie Recommendation System
+# CineMatch 2.0 — Smart Movie Recommendation System
 
-CineMatch is a polished Streamlit movie-discovery app with explainable, deterministic recommendations. It combines TMDB metadata with genre, mood, language, rating, year, runtime and discovery-style preferences. A local SQLite database stores a single local profile, watchlist, watched state, dislikes and 1–5 star ratings.
+CineMatch is a cinematic Streamlit application for discovering real movies through TMDB metadata and transparent, deterministic recommendations. Version 2.0 adds advanced discovery, upcoming releases, cast and director exploration, official collections, comparison, regional family-certification filters, English/Urdu interface support, and CSV watchlist export.
 
 ## Features
 
-- Cinematic dashboard with trending, highly rated and currently playing movies
-- Title search and complete movie details, including cast, director and trailer when TMDB provides them
-- Multi-genre recommendations with hard exclusions and transparent per-movie reasons
-- Similar-movie ranking using shared genres and available keywords
-- Persistent local preferences and watchlist, watched/disliked states and personal ratings
-- “Surprise me” from the current eligible recommendation set
-- Explicit demo mode with eight fictional, metadata-only movies and no copyrighted posters
-- Resilient TMDB client with timeouts, retry/backoff, caching, rate-limit handling and clear errors
-- Responsive dark Streamlit interface
+- **Discover:** separate title search and TMDB discovery workflows, with pagination, genres, excluded genres, release years, original language, minimum TMDB rating and vote count, runtime, origin country, and five sort modes.
+- **Recommendations:** deterministic content scoring with genre, mood, language, rating reliability, popularity, preference, runtime and watched/disliked exclusions. Every result includes reasons.
+- **Movie details:** overview, genres, runtime, original language, TMDB rating and vote count, director, main cast, character names, regional certification, TMDB link, and a preferred official YouTube trailer or teaser.
+- **People:** cached actor/director filmographies with profile photographs when TMDB supplies them.
+- **Upcoming:** region-aware upcoming results, genre/language filters, release-date sorting and changeable-release-date notices.
+- **Compare:** side-by-side metadata for two different films, including a carefully qualified TMDB user-rating comparison.
+- **Family mode:** region-specific certification filtering. Missing certifications are excluded rather than guessed, and suitability is never guaranteed.
+- **Urdu interface:** Settings can switch common navigation, actions, filters and messages between English and Urdu. Urdu layout uses right-to-left presentation where practical. Movie metadata uses TMDB localization and falls back without invented translations.
+- **Collections:** official TMDB franchise membership and chronologically sorted parts; similar movies are never mislabeled as franchise entries.
+- **Watchlist:** SQLite-backed watchlist, watched/disliked state, personal 1–5 rating, removal, and an in-memory UTF-8-with-BOM CSV export.
+- **Demo mode:** eight fictional metadata-only films with no redistributed poster assets.
 
-## Screenshots
+## Architecture
 
-Screenshots are not included because no browser screenshot was captured for this repository.
+```text
+app.py                       Streamlit entrypoint and UI orchestration
+src/tmdb_client.py           Resilient official TMDB API client
+src/recommender.py           Explainable recommendation filtering/scoring
+src/catalog.py               Advanced filters, sorting, paging and comparisons
+src/i18n.py                  English and Urdu interface strings
+src/database.py              Backward-compatible SQLite persistence
+src/watchlist_export.py      In-memory CSV generation
+src/demo_data.py             Fictional credential-free catalog
+tests/                       Unit and mocked API tests
+```
 
-## Requirements
+## Requirements and installation
 
 - Python 3.11 or newer
-- A free TMDB API credential for live data (optional for demo mode)
-
-## Installation and local execution (PowerShell)
+- Optional free TMDB API credential for live mode
 
 ```powershell
 cd "C:\Users\SALMAN\Downloads\Smart Movie Recommendation System"
@@ -32,64 +42,68 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
-Open the local URL printed by Streamlit, normally `http://localhost:8501`.
+Streamlit normally opens `http://localhost:8501`.
 
-## TMDB API setup
+## TMDB setup
 
-Create a free TMDB account and request API access from the TMDB account settings. Use either the v4 Read Access Token (recommended) or the v3 API key. Copy `.env.example` to `.env`, then add one credential:
+Obtain a credential from the TMDB account API settings. Put a v4 Read Access Token (recommended) or v3 key in the untracked `.env` file:
 
 ```dotenv
 TMDB_READ_ACCESS_TOKEN=your_read_access_token
-# or: TMDB_API_KEY=your_v3_api_key
+# Or: TMDB_API_KEY=your_v3_api_key
 DEMO_MODE=false
 ```
 
-Never commit `.env` or `.streamlit/secrets.toml`; both are ignored. For Streamlit Community Cloud, add the same name and value in the app's Secrets settings. The app reads Streamlit secrets first and environment variables second.
+The app checks Streamlit secrets first and environment variables second. It never stores credentials in SQLite. `.env`, Streamlit secret files, virtual environments and local databases are excluded by `.gitignore`.
 
-## Demo mode
+For Streamlit Community Cloud, configure one of these in the app's Secrets panel:
 
-With no credential, CineMatch clearly labels itself **Demo Catalog** and uses fictional movie records without poster assets. Set `DEMO_MODE=true` to force demo mode even when a credential exists. If live TMDB requests fail, the app reports the failure and does not silently replace results with demo records.
+```toml
+TMDB_READ_ACCESS_TOKEN = "your_read_access_token"
+DEMO_MODE = "false"
+```
 
-## Recommendation methodology
+No source-code change or new deployment URL is required when upgrading the existing app; `app.py` remains the entrypoint.
 
-The engine first applies hard filters: every selected genre must match, excluded genres must not match, and rating, language, year and available runtime must meet the selected ranges. It removes duplicate IDs and optionally removes watched/disliked titles.
+## Advanced search behavior
 
-Remaining movies receive a deterministic content score from selected and favourite genres, the documented mood-to-genre/keyword mapping, language, rating, vote count, popularity preference and—on Similar Movies—shared genres and keywords. Rating influence is reduced for titles with few votes, preventing a tiny sample from being treated like a well-established rating. Score ties use vote count and movie ID. The UI displays plain-language reasons for each result.
+Title Search uses TMDB's movie-title search endpoint and does not pretend it accepts discovery-only constraints. Advanced Discovery uses TMDB's discovery endpoint and applicable server-side parameters, followed by conservative local checks when enriched details are needed. “Load more” advances through TMDB result pages. Unreleased films are clearly marked only in Upcoming; the app makes no claim about cinema or streaming availability.
 
-TMDB does not provide a reliable mood classification. CineMatch's mood choices are transparent heuristics listed on the Settings page.
+## Recommendations
+
+Recommendations apply hard filters before deterministic scoring. TMDB rating influence is discounted when vote counts are small. Mood is an openly documented genre/keyword heuristic, not a TMDB mood classification.
+
+## Family-certification limitations
+
+Certifications come from TMDB regional release-date records and can be absent, inconsistent, or different between regions. Family mode requires an allowed certification and excludes unclassified results. Genre alone is never treated as proof of age suitability. Parents and guardians should independently verify each film.
+
+## Watchlist persistence and privacy
+
+The schema migration adds `created_at` without deleting existing records. CSV downloads are generated in memory and include title, release year, genres, TMDB rating, personal rating, status and date added.
+
+This version has one SQLite database and no authentication. On a public Streamlit deployment, the watchlist may be shared between visitors, and Community Cloud local filesystem data is not guaranteed to persist across restarts or redeployments. Do not treat it as private per-user storage.
 
 ## Testing
 
 ```powershell
 python -m pytest -q
-python -m compileall app.py src tests
+python -m compileall -q app.py src tests
+python -m streamlit run app.py --server.headless true
 ```
 
-Tests cover genre and multi-genre filtering, rating thresholds, excluded genres, deterministic scoring, duplicate removal, watched exclusions, missing metadata, empty results, SQLite operations, demo data, successful mocked API responses, invalid credentials and malformed API responses.
-
-## Deployment guidance
-
-1. Push the source to a private or public GitHub repository, ensuring `.env`, secrets and `*.db` are absent.
-2. In Streamlit Community Cloud, create an app pointing to `app.py`.
-3. Add `TMDB_READ_ACCESS_TOKEN` (or `TMDB_API_KEY`) in the Cloud app's Secrets settings.
-4. Deploy using the included `requirements.txt`.
-
-SQLite is local-process storage. Streamlit Community Cloud may restart or replace the app filesystem, so watchlist and preference persistence is not guaranteed there and is not shared across devices. This version has one local profile and does not provide authentication or secure independent user accounts. Use a hosted database plus authentication before treating it as a multi-user service.
+The test suite covers original recommendations and watchlist behavior plus advanced filtering/sorting, pagination, official trailer preference, cast/director parsing, upcoming dates, comparison, certification filtering, English/Urdu strings, collection membership, BOM-safe CSV export, API errors, missing data and legacy database migration. TMDB tests use mocked responses and require no credentials.
 
 ## Limitations
 
-- Recommendations use metadata heuristics, not collaborative filtering or trained machine learning.
-- TMDB metadata can be incomplete; missing runtime, artwork, cast, director and trailers are handled gracefully.
-- Provider availability is intentionally not claimed or scraped.
-- Search and discovery depend on TMDB availability and limits in live mode.
-- The demo catalog is deliberately small and fictional.
+- Metadata, images, localized text, videos, certifications and release dates depend on TMDB completeness.
+- Urdu interface coverage focuses on common interaction strings; movie metadata is never machine-invented.
+- The demo catalog cannot demonstrate live-only people, upcoming, certification or official collection endpoints.
+- Recommendations are metadata heuristics, not collaborative filtering or trained machine learning.
+- Provider/streaming availability is intentionally not claimed or scraped.
 
-## Attribution and licensing notes
+## Attribution
 
-This product uses the TMDB API but is not endorsed or certified by TMDB. Live movie metadata and images are supplied by TMDB and remain subject to TMDB's terms and image usage requirements. The demo movie names, people and descriptions are fictional and contain no redistributed poster artwork.
-
-Application source code may be licensed by the repository owner. No license is granted here for third-party TMDB data or imagery.
-
+This product uses the TMDB API but is not endorsed or certified by TMDB. Live movie metadata and imagery are supplied by TMDB and remain subject to TMDB's terms and image usage requirements. YouTube trailers are embedded or linked; they are not downloaded or redistributed. Demo titles and people are fictional.

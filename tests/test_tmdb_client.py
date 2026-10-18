@@ -19,3 +19,12 @@ def test_invalid_json_failure():
     responses.get("https://api.themoviedb.org/3/movie/popular", body="not json", status=200)
     with pytest.raises(TMDBError): TMDBClient(api_key="x").popular()
 
+@responses.activate
+def test_details_parses_cast_director_certification_and_trailer():
+    body={"id":1,"genres":[{"id":18,"name":"Drama"}],"credits":{"cast":[{"id":2,"name":"Actor","character":"Hero","profile_path":"/a.jpg"}],"crew":[{"id":3,"name":"Director","job":"Director"}]},"videos":{"results":[{"key":"abc","site":"YouTube","type":"Trailer","official":True}]},"keywords":{"keywords":[{"name":"hope"}]},"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"PG"}]}]}}
+    responses.get("https://api.themoviedb.org/3/movie/1", json=body, status=200)
+    movie=TMDBClient(api_key="x").details(1)
+    assert movie["cast"][0]["character"] == "Hero"
+    assert movie["director"]["name"] == "Director"
+    assert movie["certification"] == "PG" and movie["trailer"]["key"] == "abc"
+

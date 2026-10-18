@@ -4,200 +4,217 @@ from datetime import date
 from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
-
+from src.catalog import FAMILY_CERTIFICATIONS, certification_allowed, comparison_winner, filter_movies, is_upcoming, sort_movies
 from src.database import Database
 from src.demo_data import DEMO_MOVIES, GENRES
+from src.i18n import tr
 from src.preferences import merged_preferences
 from src.recommender import Filters, MOOD_MAPPINGS, recommend
 from src.tmdb_client import TMDBClient, TMDBError
+from src.watchlist_export import watchlist_csv
 
 load_dotenv()
-st.set_page_config(page_title="CineMatch", page_icon="🎬", layout="wide", initial_sidebar_state="expanded")
-st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=Playfair+Display:wght@700&display=swap');
-.stApp{background:radial-gradient(circle at 80% 0%,#2b1539 0,#0c0d13 34%,#08090d 100%);color:#f4f1eb}.block-container{max-width:1400px;padding-top:2rem}.hero{padding:2.7rem;border:1px solid #ffffff1a;border-radius:24px;background:linear-gradient(120deg,#171824ee,#38152dcc);margin-bottom:1.4rem}.hero h1{font-family:'Playfair Display';font-size:3.5rem;margin:0}.eyebrow{color:#f6af45;letter-spacing:.18em;font-weight:700;font-size:.78rem}.movie-card{background:#15161e;border:1px solid #ffffff14;border-radius:18px;overflow:hidden;padding:1rem;min-height:360px;box-shadow:0 12px 32px #0005}.poster-placeholder{height:190px;border-radius:12px;background:linear-gradient(145deg,#542343,#171827);display:flex;align-items:center;justify-content:center;font-size:3rem}.meta{color:#aaa9b4;font-size:.84rem}.score{color:#f6af45;font-weight:700}.demo-pill{background:#f6af4520;color:#f6af45;padding:.25rem .6rem;border-radius:999px;font-size:.75rem}.stButton>button{border-radius:999px}.attribution{font-size:.78rem;color:#8d8d99;padding-top:2rem}h1,h2,h3{font-family:'DM Sans',sans-serif}
-</style>""", unsafe_allow_html=True)
+st.set_page_config(page_title="CineMatch 2.0", page_icon="🎬", layout="wide")
+st.markdown("""<style>@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=Noto+Nastaliq+Urdu&family=Playfair+Display:wght@700&display=swap');.stApp{background:radial-gradient(circle at 80% 0%,#2b1539 0,#0c0d13 34%,#08090d 100%);color:#f4f1eb}.block-container{max-width:1400px;padding-top:2rem}.hero{padding:2.7rem;border:1px solid #ffffff1a;border-radius:24px;background:linear-gradient(120deg,#171824ee,#38152dcc);margin-bottom:1.4rem}.hero h1{font-family:'Playfair Display';font-size:3.35rem;margin:0}.eyebrow{color:#f6af45;letter-spacing:.18em;font-weight:700;font-size:.78rem}.poster-placeholder{height:190px;border-radius:12px;background:linear-gradient(145deg,#542343,#171827);display:flex;align-items:center;justify-content:center;font-size:3rem}.meta{color:#aaa9b4;font-size:.84rem}.demo-pill{background:#f6af4520;color:#f6af45;padding:.25rem .6rem;border-radius:999px;font-size:.75rem}.stButton>button{border-radius:999px}.attribution{font-size:.78rem;color:#8d8d99;padding-top:2rem}.rtl{direction:rtl;text-align:right;font-family:'Noto Nastaliq Urdu'}h1,h2,h3{font-family:'DM Sans'}</style>""",unsafe_allow_html=True)
 
 def secret(name):
-    try: return st.secrets.get(name) or os.getenv(name)
-    except Exception: return os.getenv(name)
+    try:return st.secrets.get(name) or os.getenv(name)
+    except Exception:return os.getenv(name)
 
-forced_demo = str(secret("DEMO_MODE") or "").lower() == "true"
-token, api_key = secret("TMDB_READ_ACCESS_TOKEN"), secret("TMDB_API_KEY")
-demo_mode = forced_demo or not (token or api_key)
-db = Database(Path(__file__).with_name("movie_recommender.db"))
-prefs = merged_preferences(db.get_preferences())
-
+token,key=secret("TMDB_READ_ACCESS_TOKEN"),secret("TMDB_API_KEY")
+demo_mode=str(secret("DEMO_MODE") or "").lower()=="true" or not(token or key)
+db=Database(Path(__file__).with_name("movie_recommender.db")); prefs=merged_preferences(db.get_preferences())
+ui=prefs.get("interface_language","en"); tmdb_lang="ur-PK" if ui=="ur" else "en-US"
 @st.cache_resource
-def live_client(key, tok): return TMDBClient(api_key=key, read_token=tok)
-client = None if demo_mode else live_client(api_key, token)
+def get_client(k,t):return TMDBClient(api_key=k,read_token=t)
+client=None if demo_mode else get_client(key,token)
+@st.cache_data(ttl=3600,show_spinner=False)
+def live_genres(lang):return {x["id"]:x["name"] for x in client.genres(lang)}
+@st.cache_data(ttl=1800,show_spinner=False)
+def live_details(mid,lang,region):return client.details(mid,lang,region)
+@st.cache_data(ttl=1800,show_spinner=False)
+def live_person(pid,lang):return client.person_movie_credits(pid,lang)
+@st.cache_data(ttl=3600,show_spinner=False)
+def live_collection(cid,lang):return client.collection(cid,lang)
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def genres_live(): return {g["id"]: g["name"] for g in client.genres()}
-@st.cache_data(ttl=900, show_spinner=False)
-def details_live(mid): return client.details(mid)
-
-genre_map = GENRES
-if client:
-    try: genre_map = genres_live()
-    except TMDBError as exc: st.error(str(exc)); st.stop()
-name_to_id = {name: gid for gid, name in genre_map.items()}
-
-def hydrate(movie):
-    if demo_mode: return movie
-    try: return details_live(int(movie["id"]))
-    except TMDBError: return movie
-
-def poster(movie):
-    path = movie.get("poster_path")
-    if path and client: st.image(client.poster_url(path), use_container_width=True)
-    else: st.markdown('<div class="poster-placeholder">🎞️</div>', unsafe_allow_html=True)
-
-def add_button(movie, key):
-    if st.button("＋ Watchlist", key=key, use_container_width=True):
-        db.add_movie(movie); st.toast(f"Added {movie.get('title', 'movie')}")
-
-def card(movie, key):
-    poster(movie)
-    year = (movie.get("release_date") or "Unknown")[:4]
-    rating = movie.get("vote_average")
-    st.markdown(f"### {movie.get('title') or 'Untitled'}")
-    st.markdown(f'<div class="meta">{year} · {movie.get("original_language", "—").upper()} · ⭐ {rating:.1f}</div>' if isinstance(rating,(int,float)) else f'<div class="meta">{year}</div>', unsafe_allow_html=True)
-    if movie.get("reasons"): st.caption("Why: " + "; ".join(movie["reasons"][:2]) + ".")
-    add_button(movie, key)
-
-def grid(movies, prefix, count=6):
-    if not movies: st.info("No movies matched. Try broadening the filters."); return
-    cols = st.columns(min(3, len(movies)))
-    for i, movie in enumerate(movies[:count]):
-        with cols[i % len(cols)]:
-            with st.container(border=True): card(movie, f"{prefix}-{movie['id']}-{i}")
-
-def show_details(movie):
-    movie = hydrate(movie)
-    left, right = st.columns([1, 2])
-    with left: poster(movie); add_button(movie, f"detail-{movie['id']}")
-    with right:
-        st.title(movie.get("title") or "Untitled")
-        if movie.get("original_title") and movie["original_title"] != movie.get("title"): st.caption(movie["original_title"])
-        st.write(" · ".join(filter(None, [(movie.get("release_date") or "")[:4], ", ".join(movie.get("genres") or []), f"{movie.get('runtime')} min" if movie.get("runtime") else None, (movie.get("original_language") or "").upper()])))
-        st.write(f"⭐ {float(movie.get('vote_average') or 0):.1f} · {int(movie.get('vote_count') or 0):,} votes")
-        st.write(movie.get("overview") or "No synopsis is available.")
-        if movie.get("director"): st.write("**Director:**", movie["director"])
-        if movie.get("cast"): st.write("**Main cast:**", ", ".join(movie["cast"]))
-        links = [f"[View on TMDB](https://www.themoviedb.org/movie/{movie['id']})"]
-        if movie.get("trailer_url"): links.append(f"[Watch trailer]({movie['trailer_url']})")
-        st.markdown(" · ".join(links))
+try:genre_map=GENRES if demo_mode else live_genres(tmdb_lang)
+except TMDBError as exc:st.error(str(exc));st.stop()
+name_to_id={v:k for k,v in genre_map.items()}
+def hydrate(m,region="US"):
+    if demo_mode:return m
+    try:return live_details(int(m["id"]),tmdb_lang,region)
+    except TMDBError:return m
+def poster(m,profile=False):
+    path=m.get("profile_path") if profile else m.get("poster_path")
+    if path and client:st.image(client.profile_url(path) if profile else client.poster_url(path),use_container_width=True)
+    else:st.markdown('<div class="poster-placeholder">👤</div>' if profile else '<div class="poster-placeholder">🎞️</div>',unsafe_allow_html=True)
+def add_button(m,k):
+    if st.button(tr("watchlist_add",ui),key=k,use_container_width=True):db.add_movie(m);st.toast(f"Added {m.get('title','movie')}")
+def card(m,k,upcoming=False):
+    poster(m);rating=m.get("vote_average"); release=m.get("release_date") or "Unknown"
+    st.markdown(f"### {m.get('title') or 'Untitled'}")
+    rt=f" · TMDB ⭐ {rating:.1f} ({int(m.get('vote_count') or 0):,})" if isinstance(rating,(int,float)) else ""
+    st.markdown(f'<div class="meta">{release[:10]} · {m.get("original_language","—").upper()}{rt}{" · UPCOMING" if upcoming else ""}</div>',unsafe_allow_html=True)
+    if m.get("reasons"):st.caption("Why: "+"; ".join(m["reasons"][:2])+".")
+    add_button(m,k)
+def grid(movies,prefix,count=12,upcoming=False):
+    if not movies:st.info(tr("no_results",ui));return
+    cols=st.columns(min(3,len(movies)))
+    for i,m in enumerate(movies[:count]):
+        with cols[i%len(cols)]:
+            with st.container(border=True):card(m,f"{prefix}-{m.get('id')}-{i}",upcoming)
+def people(m):
+    persons=[]; director=m.get("director")
+    if isinstance(director,dict):persons.append({**director,"role":"Director"})
+    persons += [{**x,"role":x.get("character") or "Cast"} for x in (m.get("cast") or []) if isinstance(x,dict)]
+    if not persons:return
+    st.subheader("Cast & crew");cols=st.columns(min(4,len(persons)))
+    for i,p in enumerate(persons):
+        with cols[i%len(cols)]:poster(p,True);st.write(f"**{p.get('name','Unknown')}**");st.caption(p["role"])
+    p=st.selectbox("Explore this person's movies",[None]+persons,format_func=lambda x:"Select an actor or director" if x is None else f"{x['name']} — {x['role']}",key=f"person-{m['id']}")
+    if p and p.get("id") and client:grid(sort_movies(live_person(p["id"],tmdb_lang),"Newest release"),f"person-{p['id']}",6)
+def details(m,region="US",full=True):
+    m=hydrate(m,region);a,b=st.columns([1,2])
+    with a:poster(m);add_button(m,f"detail-{m['id']}")
+    with b:
+        st.title(m.get("title") or "Untitled"); gs=m.get("genres") or []
+        if gs and isinstance(gs[0],dict):gs=[x.get("name","") for x in gs]
+        st.write(" · ".join(filter(None,[(m.get("release_date") or "")[:4],", ".join(gs),f"{m.get('runtime')} min" if m.get("runtime") else None,(m.get("original_language") or "").upper()])))
+        st.write(f"TMDB ⭐ {float(m.get('vote_average') or 0):.1f} · {int(m.get('vote_count') or 0):,} user votes · Popularity {float(m.get('popularity') or 0):.1f}")
+        st.write(f"**{region} certification:** {m['certification']}" if m.get("certification") else f"No {region} certification is available from TMDB.")
+        st.write(m.get("overview") or "No synopsis is available in the selected language.")
+        d=m.get("director");dn=d.get("name") if isinstance(d,dict) else d
+        if dn:st.write("**Director:**",dn)
+        st.markdown(f"[View on TMDB](https://www.themoviedb.org/movie/{m['id']})")
+    if full:
+        v=m.get("trailer")
+        if v:st.subheader(f"{v.get('type','Trailer')} · {'Official' if v.get('official') else 'TMDB-listed'}");st.video(f"https://www.youtube.com/watch?v={v['key']}",autoplay=False)
+        elif m.get("trailer_url"):st.markdown(f"[Trailer]({m['trailer_url']})")
+        else:st.info("No trailer or teaser is currently listed by TMDB.")
+        people(m)
+        if m.get("belongs_to_collection"):st.info(f"Part of **{m['belongs_to_collection'].get('name')}**. Explore it in Collections.")
+    return m
 
 with st.sidebar:
-    st.markdown("## 🎬 CineMatch")
-    st.caption("Your next great watch, explained.")
-    page = st.radio("Navigate", ["Discover", "Recommendations", "Similar Movies", "Watchlist", "Settings"], label_visibility="collapsed")
-    st.divider()
-    st.markdown('<span class="demo-pill">DEMO CATALOG</span>' if demo_mode else '<span class="demo-pill">LIVE TMDB</span>', unsafe_allow_html=True)
-    if demo_mode: st.caption("Using fictional metadata-only sample movies. Add a TMDB credential for live results.")
+    st.markdown("## 🎬 CineMatch 2.0");st.caption("Your next great watch, explained.")
+    groups={"Explore":["Discover","Recommendations","Similar Movies","Upcoming"],"Deep dive":["Compare","Collections"],"Personal":["Watchlist","Settings"]}
+    group=st.selectbox("Section",list(groups),label_visibility="collapsed");page=st.radio("Navigate",groups[group],format_func=lambda x:tr(x,ui),label_visibility="collapsed")
+    st.divider();st.markdown('<span class="demo-pill">DEMO CATALOG</span>' if demo_mode else '<span class="demo-pill">LIVE TMDB</span>',unsafe_allow_html=True)
+if ui=="ur":st.markdown('<div class="rtl">اردو انٹرفیس فعال ہے۔ دستیاب نہ ہونے پر فلمی معلومات انگریزی میں دکھائی جاتی ہیں۔</div>',unsafe_allow_html=True)
 
-if page == "Discover":
-    st.markdown('<section class="hero"><div class="eyebrow">CURATED MOVIE DISCOVERY</div><h1>Find a story worth staying up for.</h1><p>Search, explore and save films with recommendations you can actually understand.</p></section>', unsafe_allow_html=True)
-    query = st.text_input("Search movies", placeholder="Search by title…", icon="🔎")
-    if query:
-        if demo_mode: results = [m for m in DEMO_MOVIES if query.lower() in m["title"].lower()]
-        else:
-            try:
-                with st.spinner("Searching TMDB…"): results = client.search(query)
-            except TMDBError as exc: st.error(str(exc)); results=[]
-        if results:
-            chosen = st.selectbox("Choose a result", results, format_func=lambda x: f"{x.get('title','Untitled')} ({(x.get('release_date') or '????')[:4]})")
-            show_details(chosen)
-        else: st.info("No matching movies found.")
-    else:
-        if demo_mode:
-            sections = [("Featured demo movies", DEMO_MOVIES), ("Highly rated", sorted(DEMO_MOVIES,key=lambda m:m["vote_average"],reverse=True)), ("Recent", sorted(DEMO_MOVIES,key=lambda m:m["release_date"],reverse=True))]
-        else:
-            try:
-                with st.spinner("Loading movies from TMDB…"):
-                    sections = [("Trending this week", client.trending()), ("Highly rated", client.top_rated()), ("Now playing", client.now_playing())]
-            except TMDBError as exc: st.error(str(exc)); sections=[]
-        for title, movies in sections: st.subheader(title); grid(movies, title, 6)
-
-elif page == "Recommendations":
-    st.title("Recommendations")
-    st.caption("Mood is an explicit genre/keyword heuristic—not a classification supplied by TMDB.")
-    with st.sidebar:
-        st.subheader("Fine-tune")
-        selected = st.multiselect("Genres", list(name_to_id), default=[g for g in prefs["favorite_genres"] if g in name_to_id])
-        excluded = st.multiselect("Exclude genres", [g for g in name_to_id if g not in selected], default=[g for g in prefs["excluded_genres"] if g in name_to_id and g not in selected])
-        mood = st.selectbox("Mood", list(MOOD_MAPPINGS))
-        language = st.selectbox("Original language", ["Any", "en", "es", "fr", "ko", "ja", "hi", "de", "it"], index=0)
-        min_rating = st.slider("Minimum TMDB rating", 0.0, 9.0, float(prefs["min_rating"]), .5)
-        years = st.slider("Release years", 1900, date.today().year, (1980, date.today().year))
-        runtimes = st.slider("Runtime (minutes)", 0, 300, (0, 240))
-        discovery = st.radio("Discovery style", ["Balanced", "Popular", "Hidden gems"], horizontal=True)
-        amount = st.slider("Results", 1, 20, 9)
-        omit = st.checkbox("Exclude watched/disliked", True)
-    filters = Filters({name_to_id[x] for x in selected}, {name_to_id[x] for x in excluded}, mood, language, min_rating, *years, *runtimes, discovery)
-    if demo_mode: catalog = DEMO_MOVIES
-    else:
+if page=="Discover":
+    st.markdown('<section class="hero"><div class="eyebrow">CINEMATCH 2.0</div><h1>Find a story worth staying up for.</h1><p>Title search and advanced discovery are separate, so every filter does what it says.</p></section>',unsafe_allow_html=True)
+    title_tab,advanced=st.tabs([tr("title_search",ui),tr("advanced_discovery",ui)])
+    with title_tab:
+        q=st.text_input(tr("search",ui));p=st.number_input("Results page",1,500,1)
+        if q.strip():
+            try:results=[x for x in DEMO_MOVIES if q.lower() in x["title"].lower()] if demo_mode else client.search(q,int(p),tmdb_lang)
+            except TMDBError as exc:st.error(str(exc));results=[]
+            if results:details(st.selectbox(tr("details",ui),results,format_func=lambda x:f"{x.get('title')} ({(x.get('release_date') or '????')[:4]})"))
+            else:st.info(tr("no_results",ui))
+    with advanced:
+        with st.form("advanced"):
+            a,b,c=st.columns(3);gs=a.multiselect("Genres",list(name_to_id));ex=a.multiselect("Exclude genres",[x for x in name_to_id if x not in gs]);years=b.slider("Release years",1900,date.today().year,(1980,date.today().year));lang=b.selectbox("Original language",["Any","en","ur","hi","ko","ja","es","fr","de"]);rating=c.slider("Minimum TMDB rating",0.,9.,0.,.5);votes=c.number_input("Minimum vote count",0,1000000,0,100);runtime=a.slider("Runtime where available",0,300,(0,240));country=b.selectbox("Country of origin",["Any","US","GB","PK","IN","KR","JP","FR","DE","CA","AU"]);sort=c.selectbox(tr("sort",ui),["Popularity","Newest release","Oldest release","Highest rated","Most votes"]);family=a.checkbox("Family-Friendly mode");region=b.selectbox("Certification region",["US","GB","PK","IN","CA","AU"]);certs=c.multiselect("Allowed certifications",sorted(FAMILY_CERTIFICATIONS[region]),default=sorted(FAMILY_CERTIFICATIONS[region])) if family else [];submitted=st.form_submit_button("Discover movies",type="primary")
+        if submitted:st.session_state.discovery_page=1
+        if "discovery_page" not in st.session_state:st.session_state.discovery_page=1
         try:
-            with st.spinner("Finding matches…"):
-                params = {"sort_by":"popularity.desc", "vote_average.gte":min_rating, "primary_release_date.gte":f"{years[0]}-01-01", "primary_release_date.lte":f"{years[1]}-12-31", "with_runtime.gte":runtimes[0], "with_runtime.lte":runtimes[1]}
-                if selected: params["with_genres"] = ",".join(str(name_to_id[x]) for x in selected)
-                if excluded: params["without_genres"] = ",".join(str(name_to_id[x]) for x in excluded)
-                if language != "Any": params["with_original_language"] = language
-                catalog = [hydrate(m) for m in client.discover(**params)]
-        except TMDBError as exc: st.error(str(exc)); catalog=[]
-    results = recommend(catalog, filters, amount, {name_to_id[x] for x in prefs["favorite_genres"] if x in name_to_id}, db.excluded_ids() if omit else set())
-    if st.button("🎲 Surprise me", disabled=not results):
-        st.session_state.surprise = random.choice(results)
-    if st.session_state.get("surprise") in results:
-        st.success("Tonight's pick"); show_details(st.session_state.surprise)
-    st.subheader(f"{len(results)} best matches"); grid(results, "rec", amount)
-
-elif page == "Similar Movies":
-    st.title("Similar Movies")
-    q = st.text_input("Choose a movie you like", placeholder="Start typing a title…")
-    if q:
-        try: options = [m for m in DEMO_MOVIES if q.lower() in m["title"].lower()] if demo_mode else client.search(q)
-        except TMDBError as exc: st.error(str(exc)); options=[]
-        if options:
-            seed = hydrate(st.selectbox("Movie", options, format_func=lambda x:x.get("title","Untitled")))
-            if demo_mode: pool = [m for m in DEMO_MOVIES if m["id"] != seed["id"]]
+            if demo_mode:catalog=DEMO_MOVIES
             else:
-                try: pool = [hydrate(m) for m in client.similar(seed["id"])]
-                except TMDBError as exc: st.error(str(exc)); pool=[]
-            filters = Filters(year_min=1900, year_max=2100, runtime_max=1000)
-            grid(recommend(pool, filters, 12, seed=seed), "similar", 12)
-        else: st.info("No matching movie found.")
+                params={"sort_by":{"Popularity":"popularity.desc","Newest release":"primary_release_date.desc","Oldest release":"primary_release_date.asc","Highest rated":"vote_average.desc","Most votes":"vote_count.desc"}[sort],"vote_average.gte":rating,"vote_count.gte":votes,"primary_release_date.gte":f"{years[0]}-01-01","primary_release_date.lte":f"{years[1]}-12-31","with_runtime.gte":runtime[0],"with_runtime.lte":runtime[1],"language":tmdb_lang}
+                if gs:params["with_genres"]=",".join(str(name_to_id[x]) for x in gs)
+                if ex:params["without_genres"]=",".join(str(name_to_id[x]) for x in ex)
+                if lang!="Any":params["with_original_language"]=lang
+                if country!="Any":params["with_origin_country"]=country
+                catalog=client.discover(st.session_state.discovery_page,**params);catalog=[hydrate(x,region) for x in catalog] if family or country!="Any" or runtime!=(0,240) else catalog
+            catalog=filter_movies(catalog,genres={name_to_id[x] for x in gs},excluded={name_to_id[x] for x in ex},year_min=years[0],year_max=years[1],language=lang,rating=rating,votes=votes,runtime_min=runtime[0],runtime_max=runtime[1],country=country)
+            if family:catalog=[x for x in catalog if certification_allowed(x.get("certification"),region,True,set(certs))]
+            grid(sort_movies(catalog,sort),f"discovery-{st.session_state.discovery_page}")
+            if not demo_mode and st.button(tr("load_more",ui)):st.session_state.discovery_page+=1;st.rerun()
+        except TMDBError as exc:st.error(str(exc))
+        if family:st.warning("Certifications vary by region. Unclassified titles are excluded; parents or guardians should verify suitability independently.")
 
-elif page == "Watchlist":
-    st.title("Your Watchlist")
-    st.caption("Stored only in this local SQLite database; it is not synced between devices.")
-    rows = db.get_watchlist()
-    if not rows: st.info("Your watchlist is empty. Add a movie from Discover or Recommendations.")
+elif page=="Recommendations":
+    st.title(tr("Recommendations",ui));st.caption("Mood is an explicit genre/keyword heuristic—not a TMDB classification.")
+    with st.form("recommend"):
+        a,b,c=st.columns(3);gs=a.multiselect("Genres",list(name_to_id),default=[x for x in prefs["favorite_genres"] if x in name_to_id]);ex=a.multiselect("Exclude genres",[x for x in name_to_id if x not in gs],default=[x for x in prefs["excluded_genres"] if x in name_to_id and x not in gs]);mood=b.selectbox("Mood",list(MOOD_MAPPINGS));lang=b.selectbox("Original language",["Any","en","ur","hi","ko","ja","es","fr"]);rating=b.slider("Minimum TMDB rating",0.,9.,float(prefs["min_rating"]),.5);years=c.slider("Release years",1900,date.today().year,(1980,date.today().year));runtime=c.slider("Runtime",0,300,(0,240));style=c.radio("Discovery style",["Balanced","Popular","Hidden gems"],horizontal=True);family=a.checkbox("Family-Friendly mode");region=b.selectbox("Certification region",["US","GB","PK","IN","CA","AU"],key="rec-region");amount=c.slider("Results",1,20,9);st.form_submit_button("Recommend",type="primary")
+    f=Filters({name_to_id[x] for x in gs},{name_to_id[x] for x in ex},mood,lang,rating,*years,*runtime,style)
+    try:
+        if demo_mode:catalog=DEMO_MOVIES
+        else:
+            params={"sort_by":"popularity.desc","vote_average.gte":rating,"primary_release_date.gte":f"{years[0]}-01-01","primary_release_date.lte":f"{years[1]}-12-31","with_runtime.gte":runtime[0],"with_runtime.lte":runtime[1],"language":tmdb_lang}
+            if gs:params["with_genres"]=",".join(str(name_to_id[x]) for x in gs)
+            if ex:params["without_genres"]=",".join(str(name_to_id[x]) for x in ex)
+            if lang!="Any":params["with_original_language"]=lang
+            catalog=[hydrate(x,region) for x in client.discover(**params)]
+        if family:catalog=[x for x in catalog if certification_allowed(x.get("certification"),region,True)]
+        results=recommend(catalog,f,amount,{name_to_id[x] for x in prefs["favorite_genres"] if x in name_to_id},db.excluded_ids())
+        if st.button("🎲 Surprise me",disabled=not results):st.session_state.surprise=random.choice(results)
+        if st.session_state.get("surprise") in results:details(st.session_state.surprise,region)
+        grid(results,"rec",amount)
+    except TMDBError as exc:st.error(str(exc))
+
+elif page=="Similar Movies":
+    st.title(tr("Similar Movies",ui));q=st.text_input("Choose a movie you like")
+    if q:
+        try:opts=[x for x in DEMO_MOVIES if q.lower() in x["title"].lower()] if demo_mode else client.search(q,language=tmdb_lang)
+        except TMDBError as exc:st.error(str(exc));opts=[]
+        if opts:
+            seed=hydrate(st.selectbox("Movie",opts,format_func=lambda x:x.get("title")));pool=[x for x in DEMO_MOVIES if x["id"]!=seed["id"]] if demo_mode else [hydrate(x) for x in client.similar(seed["id"])]
+            grid(recommend(pool,Filters(year_min=1900,year_max=2100,runtime_max=1000),12,seed=seed),"similar")
+
+elif page=="Upcoming":
+    st.title(tr("Upcoming",ui));st.info("Release dates may change. No cinema or streaming availability is implied.")
+    a,b,c=st.columns(3);region=a.selectbox("Release region",["US","GB","PK","IN","CA","AU"]);genre=b.selectbox("Genre",["Any"]+list(name_to_id));lang=c.selectbox("Original language",["Any","en","ur","hi","ko","ja","es","fr"],key="up-lang");order=st.radio("Release order",["Soonest first","Latest first"],horizontal=True)
+    try:
+        ms=[x for x in DEMO_MOVIES if is_upcoming(x)] if demo_mode else client.upcoming(language=tmdb_lang,region=region).get("results",[]);ms=filter_movies(ms,genres=set() if genre=="Any" else {name_to_id[genre]},language=lang,year_min=date.today().year,year_max=date.today().year+5);ms=sorted(ms,key=lambda x:x.get("release_date") or "9999",reverse=order=="Latest first");grid(ms,"upcoming",12,True)
+        if ms:
+            selected_upcoming=st.selectbox("Open upcoming movie details and trailer",ms,format_func=lambda x:f"{x.get('title','Untitled')} — {x.get('release_date','Unknown')}")
+            details(selected_upcoming,region)
+    except TMDBError as exc:st.error(str(exc))
+
+elif page=="Compare":
+    st.title(tr("Compare",ui));a,b=st.columns(2);qa=a.text_input("First movie");qb=b.text_input("Second movie")
+    try:
+        oa=([x for x in DEMO_MOVIES if qa.lower() in x["title"].lower()] if demo_mode else client.search(qa,language=tmdb_lang)) if qa else [];ob=([x for x in DEMO_MOVIES if qb.lower() in x["title"].lower()] if demo_mode else client.search(qb,language=tmdb_lang)) if qb else []
+        if oa and ob:
+            x=a.selectbox("Select first",oa,format_func=lambda z:z.get("title"));y=b.selectbox("Select second",ob,format_func=lambda z:z.get("title"))
+            if x["id"]==y["id"]:st.warning("Choose two different movies.")
+            else:
+                l,r=st.columns(2)
+                with l:ld=details(x,full=False)
+                with r:rd=details(y,full=False)
+                winner=comparison_winner(ld,rd);st.info((f"{winner} has the higher TMDB user rating. " if winner else "The ratings are tied. ")+"Ratings are user-generated and depend on vote counts; this is not an objective judgment of quality.")
+    except TMDBError as exc:st.error(str(exc))
+
+elif page=="Collections":
+    st.title(tr("Collections",ui));q=st.text_input("Search for a movie in a franchise")
+    if q:
+        try:opts=[x for x in DEMO_MOVIES if q.lower() in x["title"].lower()] if demo_mode else client.search(q,language=tmdb_lang)
+        except TMDBError as exc:st.error(str(exc));opts=[]
+        if opts:
+            m=hydrate(st.selectbox("Movie",opts,format_func=lambda x:x.get("title")));col=m.get("belongs_to_collection")
+            if col and client:
+                data=live_collection(col["id"],tmdb_lang);st.subheader(data.get("name"));parts=sorted(data.get("parts",[]),key=lambda x:x.get("release_date") or "9999");grid(parts,"collection",30)
+                if parts:details(st.selectbox("Open a collection movie",parts,format_func=lambda x:f"{x.get('title','Untitled')} ({(x.get('release_date') or '????')[:4]})",key="collection-part"))
+            else:st.info("TMDB does not list this movie in an official collection. Similar movies are not treated as franchise entries.")
+
+elif page=="Watchlist":
+    st.title(tr("Watchlist",ui));st.warning("This app has one shared local SQLite file and no authentication. On a public deployment, entries may be visible to others and local storage may reset.")
+    rows=db.get_watchlist();st.download_button("Export watchlist as CSV",watchlist_csv(rows),"cinematch-watchlist.csv","text/csv",disabled=not rows)
+    if not rows:st.info("Your watchlist is empty.")
     for row in rows:
-        movie = row["metadata"]
         with st.container(border=True):
-            c1,c2,c3 = st.columns([3,2,1])
-            c1.subheader(row["title"]); c1.caption(f"Status: {row['status'].title()}")
-            status = c2.selectbox("Status", ["watchlist","watched","disliked"], index=["watchlist","watched","disliked"].index(row["status"]), key=f"s{row['movie_id']}")
-            rating = c2.selectbox("Your rating", [None,1,2,3,4,5], index=([None,1,2,3,4,5].index(row["user_rating"])), key=f"r{row['movie_id']}")
-            if c3.button("Save", key=f"u{row['movie_id']}"): db.update_movie(row["movie_id"], status, rating); st.rerun()
-            if c3.button("Remove", key=f"d{row['movie_id']}"): db.remove_movie(row["movie_id"]); st.rerun()
+            a,b,c=st.columns([3,2,1]);a.subheader(row["title"]);a.caption(f"Status: {row['status'].title()} · Added: {row.get('created_at') or 'Unknown'}");status=b.selectbox("Status",["watchlist","watched","disliked"],index=["watchlist","watched","disliked"].index(row["status"]),key=f"s{row['movie_id']}");rating=b.selectbox("Your rating",[None,1,2,3,4,5],index=[None,1,2,3,4,5].index(row["user_rating"]),key=f"r{row['movie_id']}")
+            if c.button("Save",key=f"u{row['movie_id']}"):db.update_movie(row["movie_id"],status,rating);st.rerun()
+            if c.button("Remove",key=f"d{row['movie_id']}"):db.remove_movie(row["movie_id"]);st.rerun()
 
 else:
-    st.title("Settings")
-    fav = st.multiselect("Favourite genres", list(name_to_id), default=[g for g in prefs["favorite_genres"] if g in name_to_id])
-    exc = st.multiselect("Genres to exclude", [g for g in name_to_id if g not in fav], default=[g for g in prefs["excluded_genres"] if g in name_to_id and g not in fav])
-    lang = st.selectbox("Preferred language", ["Any","en","es","fr","ko","ja","hi","de","it"], index=["Any","en","es","fr","ko","ja","hi","de","it"].index(prefs["language"]) if prefs["language"] in ["Any","en","es","fr","ko","ja","hi","de","it"] else 0)
-    threshold = st.slider("Default minimum rating", 0.0, 9.0, float(prefs["min_rating"]), .5)
-    if st.button("Save preferences", type="primary"): db.save_preferences({"favorite_genres":fav,"excluded_genres":exc,"language":lang,"min_rating":threshold}); st.success("Preferences saved.")
-    st.divider(); st.subheader("Local data")
-    st.warning("Clearing data permanently removes local preferences and watchlist entries.")
-    confirm = st.checkbox("I understand this cannot be undone")
-    if st.button("Clear all saved data", disabled=not confirm): db.clear_all(); st.success("Local data cleared."); st.rerun()
-    st.subheader("Mood mapping")
-    for mood, mapping in MOOD_MAPPINGS.items():
-        if mood != "Any": st.write(f"**{mood}:** genres {', '.join(genre_map.get(g,str(g)) for g in mapping['genres'])}; keywords {', '.join(sorted(mapping['keywords']))}")
+    st.title(tr("Settings",ui));interface=st.selectbox(tr("language",ui),["English","اردو"],index=1 if ui=="ur" else 0);fav=st.multiselect("Favourite genres",list(name_to_id),default=[x for x in prefs["favorite_genres"] if x in name_to_id]);ex=st.multiselect("Genres to exclude",[x for x in name_to_id if x not in fav],default=[x for x in prefs["excluded_genres"] if x in name_to_id and x not in fav]);langs=["Any","en","ur","hi","ko","ja","es","fr"];lang=st.selectbox("Preferred movie language",langs,index=langs.index(prefs["language"]) if prefs["language"] in langs else 0);rating=st.slider("Default minimum TMDB rating",0.,9.,float(prefs["min_rating"]),.5)
+    if st.button("Save preferences",type="primary"):db.save_preferences({"favorite_genres":fav,"excluded_genres":ex,"language":lang,"min_rating":rating,"interface_language":"ur" if interface=="اردو" else "en"});st.success(tr("saved",ui));st.rerun()
+    st.divider();st.subheader("Mood mappings")
+    for mood,m in MOOD_MAPPINGS.items():
+        if mood!="Any":st.write(f"**{mood}:** genres {', '.join(genre_map.get(g,str(g)) for g in m['genres'])}; keywords {', '.join(sorted(m['keywords']))}")
+    st.subheader("Local data");st.warning("Clearing permanently removes local preferences and watchlist entries.");confirm=st.checkbox("I understand this cannot be undone")
+    if st.button("Clear all saved data",disabled=not confirm):db.clear_all();st.rerun()
 
-st.markdown('<div class="attribution">This product uses the TMDB API but is not endorsed or certified by TMDB. Movie metadata and images in live mode are supplied by TMDB. Demo titles and metadata are fictional; no poster artwork is redistributed.</div>', unsafe_allow_html=True)
-
+st.markdown('<div class="attribution">This product uses the TMDB API but is not endorsed or certified by TMDB. Live metadata and images are supplied by TMDB. Demo titles are fictional; no poster or trailer media is redistributed.</div>',unsafe_allow_html=True)

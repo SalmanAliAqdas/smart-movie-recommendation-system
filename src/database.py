@@ -21,7 +21,12 @@ class Database:
                 movie_id INTEGER PRIMARY KEY, title TEXT NOT NULL, poster_path TEXT,
                 release_date TEXT, status TEXT NOT NULL DEFAULT 'watchlist',
                 user_rating INTEGER CHECK(user_rating BETWEEN 1 AND 5 OR user_rating IS NULL),
-                metadata TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+                metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            columns = {row[1] for row in con.execute("PRAGMA table_info(watchlist)")}
+            if "created_at" not in columns:
+                con.execute("ALTER TABLE watchlist ADD COLUMN created_at TEXT")
+                con.execute("UPDATE watchlist SET created_at=COALESCE(created_at, updated_at, CURRENT_TIMESTAMP)")
 
     def save_preferences(self, values: dict):
         with self.connect() as con:
