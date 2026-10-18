@@ -36,7 +36,22 @@ class TMDBClient:
         try: return response.json()
         except ValueError as exc: raise TMDBError("TMDB returned an invalid response.") from exc
 
-    def genres(self, language: str = "en-US"): return self._get("/genre/movie/list", language=language).get("genres", [])
+    def genres(self, language: str = "en-US") -> list[dict]:
+        """Return TMDB movie genres as a validated list of genre objects."""
+        payload = self._get("/genre/movie/list", language=language)
+        genres = payload.get("genres", []) if isinstance(payload, dict) else []
+        if not isinstance(genres, list):
+            raise TMDBError("TMDB returned an invalid movie genre response.")
+        return [genre for genre in genres if isinstance(genre, dict)]
+
+    def genre_map(self, language: str = "en-US") -> dict[int, str]:
+        """Return a stable ID-to-name mapping for application consumers."""
+        result: dict[int, str] = {}
+        for genre in self.genres(language=language):
+            genre_id, name = genre.get("id"), genre.get("name")
+            if genre_id is not None and isinstance(name, str) and name.strip():
+                result[int(genre_id)] = name.strip()
+        return result
     def trending(self): return self._get("/trending/movie/week").get("results", [])
     def popular(self): return self._get("/movie/popular").get("results", [])
     def top_rated(self): return self._get("/movie/top_rated").get("results", [])

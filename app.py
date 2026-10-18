@@ -25,11 +25,14 @@ token,key=secret("TMDB_READ_ACCESS_TOKEN"),secret("TMDB_API_KEY")
 demo_mode=str(secret("DEMO_MODE") or "").lower()=="true" or not(token or key)
 db=Database(Path(__file__).with_name("movie_recommender.db")); prefs=merged_preferences(db.get_preferences())
 ui=prefs.get("interface_language","en"); tmdb_lang="ur-PK" if ui=="ur" else "en-US"
+TMDB_CLIENT_CACHE_VERSION = 2
 @st.cache_resource
-def get_client(k,t):return TMDBClient(api_key=k,read_token=t)
-client=None if demo_mode else get_client(key,token)
+def get_v2_client(k,t,cache_version):
+    # cache_version intentionally invalidates pre-V2 TMDBClient instances after hot reloads.
+    return TMDBClient(api_key=k,read_token=t)
+client=None if demo_mode else get_v2_client(key,token,TMDB_CLIENT_CACHE_VERSION)
 @st.cache_data(ttl=3600,show_spinner=False)
-def live_genres(lang):return {x["id"]:x["name"] for x in client.genres(lang)}
+def live_genres(lang):return client.genre_map(language=lang)
 @st.cache_data(ttl=1800,show_spinner=False)
 def live_details(mid,lang,region):return client.details(mid,lang,region)
 @st.cache_data(ttl=1800,show_spinner=False)

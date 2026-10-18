@@ -10,6 +10,23 @@ def test_search_success_and_credential_header():
     assert responses.calls[0].request.headers["Authorization"] == "Bearer token"
 
 @responses.activate
+def test_genre_map_accepts_language_and_normalizes_response():
+    responses.get(
+        "https://api.themoviedb.org/3/genre/movie/list",
+        json={"genres": [{"id": 28, "name": "Action"}, {"id": 18, "name": " Drama "}]},
+        status=200,
+    )
+    result = TMDBClient(api_key="x").genre_map(language="ur-PK")
+    assert result == {28: "Action", 18: "Drama"}
+    assert responses.calls[0].request.params["language"] == "ur-PK"
+
+@responses.activate
+def test_genres_rejects_invalid_return_shape():
+    responses.get("https://api.themoviedb.org/3/genre/movie/list", json={"genres": {}}, status=200)
+    with pytest.raises(TMDBError, match="invalid movie genre response"):
+        TMDBClient(api_key="x").genre_map()
+
+@responses.activate
 def test_api_auth_failure():
     responses.get("https://api.themoviedb.org/3/movie/popular", json={"status_message":"Invalid"}, status=401)
     with pytest.raises(TMDBAuthError): TMDBClient(api_key="bad").popular()
